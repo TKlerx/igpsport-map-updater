@@ -57,9 +57,12 @@ fi
 
 TAG_CONF_FILE="$SCRIPT_DIR/tag-igpsport.xml"
 TAG_TRANSFORM_FILE="$SCRIPT_DIR/tag-igpsport-transform.xml"
-THREADS=4
-TMP_DIR="$SCRIPT_DIR/tmp"
-export JAVA_OPTS="-Xms1g -Xmx8g -Djava.io.tmpdir=$TMP_DIR"
+THREADS="${MAP_WRITER_THREADS:-4}"
+MAP_WRITER_TYPE="${MAP_WRITER_TYPE:-hd}"
+TMP_DIR="${JAVA_TMP_DIR:-$SCRIPT_DIR/tmp}"
+JAVA_XMS="${JAVA_XMS:-1g}"
+JAVA_XMX="${JAVA_XMX:-8g}"
+export JAVA_OPTS="-Xms$JAVA_XMS -Xmx$JAVA_XMX -Djava.io.tmpdir=$TMP_DIR"
 export CLASSPATH="$OSMOSIS_DIR/lib/mapsforge-map-writer-${MAPSFORGE_WRITER_VERSION}-jar-with-dependencies.jar:$CLASSPATH"
 
 # Create directories
@@ -139,6 +142,12 @@ echo ""
 echo "=========================================="
 echo "Found ${#PBF_FILES[@]} entries to process"
 echo "=========================================="
+echo ""
+echo "Mapsforge configuration:"
+echo "  Writer Type:  $MAP_WRITER_TYPE"
+echo "  Threads:      $THREADS"
+echo "  Java Heap:    -Xms$JAVA_XMS -Xmx$JAVA_XMX"
+echo "  Java tmpdir:  $TMP_DIR"
 echo ""
 
 if [ ! -f "$TAG_CONF_FILE" ]; then
@@ -372,7 +381,7 @@ for i in "${!PBF_FILES[@]}"; do
         --read-pbf-fast file="$INPUT_FILE" \
         --bounding-polygon file="$POLY_FILE" \
         --tag-transform file="$TAG_TRANSFORM_FILE" \
-        --mapfile-writer file="$OUTPUT_FILE" type=hd zoom-interval-conf=13,13,13,14,14,14 threads=$THREADS tag-conf-file="$TAG_CONF_FILE"
+        --mapfile-writer file="$OUTPUT_FILE" type="$MAP_WRITER_TYPE" zoom-interval-conf=13,13,13,14,14,14 threads="$THREADS" tag-conf-file="$TAG_CONF_FILE"
     
     if [ ! -f "$OUTPUT_FILE" ]; then
         echo "WARNING: Osmosis did not generate file for: $file_name - skipping"

@@ -1,4 +1,5 @@
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 
 $SCRIPT_DIR = $PSScriptRoot
 
@@ -50,9 +51,12 @@ if (-not (Test-Path $OSMOSIS_WRAPPER)) {
 
 $TAG_CONF_FILE = Join-Path $SCRIPT_DIR "tag-igpsport.xml"
 $TAG_TRANSFORM_FILE = Join-Path $SCRIPT_DIR "tag-igpsport-transform.xml"
-$THREADS = 4
-$TMP_DIR = Join-Path $SCRIPT_DIR "tmp"
-$env:JAVA_OPTS = "-Xms1g -Xmx8g -Djava.io.tmpdir=$TMP_DIR"
+$THREADS = if ($env:MAP_WRITER_THREADS) { [int]$env:MAP_WRITER_THREADS } else { 4 }
+$MAP_WRITER_TYPE = if ($env:MAP_WRITER_TYPE) { $env:MAP_WRITER_TYPE } else { "hd" }
+$TMP_DIR = if ($env:JAVA_TMP_DIR) { $env:JAVA_TMP_DIR } else { (Join-Path $SCRIPT_DIR "tmp") }
+$JAVA_XMS = if ($env:JAVA_XMS) { $env:JAVA_XMS } else { "1g" }
+$JAVA_XMX = if ($env:JAVA_XMX) { $env:JAVA_XMX } else { "8g" }
+$env:JAVA_OPTS = "-Xms$JAVA_XMS -Xmx$JAVA_XMX -Djava.io.tmpdir=$TMP_DIR"
 $env:CLASSPATH = "$MAPSFORGE_WRITER_JAR;$env:CLASSPATH"
 
 # Create directories
@@ -76,9 +80,14 @@ $PBF_FILES = @()
 $POLY_FILES = @()
 $ORIGINAL_NAMES = @()
 
-$csv = Import-Csv $CSV_FILE
+$csv = @(Import-Csv $CSV_FILE)
+$csv_total = $csv.Count
+$csv_index = 0
 
 foreach ($row in $csv) {
+    $csv_index++
+    $pct = [math]::Floor((($csv_index - 1) / $csv_total) * 100)
+    Write-Progress -Activity "Downloading data" -Status "[$csv_index/$csv_total] $($row.'Original filename')" -PercentComplete $pct
     $original_name = $row.'Original filename'
     $pbf_url = $row.'OSM BPF URL'
     $poly_url = $row.'Poly URL'
@@ -119,6 +128,8 @@ foreach ($row in $csv) {
     $ORIGINAL_NAMES += $original_name
 }
 
+Write-Progress -Activity "Downloading data" -Completed
+
 if ($PBF_FILES.Count -eq 0) {
     Write-Error "ERROR: No entries found in maps.csv"
     exit 1
@@ -128,6 +139,12 @@ Write-Host ""
 Write-Host "=========================================="
 Write-Host "Found $($PBF_FILES.Count) entries to process"
 Write-Host "=========================================="
+Write-Host ""
+Write-Host "Mapsforge configuration:"
+Write-Host "  Writer Type:  $MAP_WRITER_TYPE"
+Write-Host "  Threads:      $THREADS"
+Write-Host "  Java Heap:    -Xms$JAVA_XMS -Xmx$JAVA_XMX"
+Write-Host "  Java tmpdir:  $TMP_DIR"
 Write-Host ""
 
 if (-not (Test-Path $TAG_CONF_FILE)) {
@@ -343,25 +360,31 @@ function Get-GeoName {
 }
 
 $file_index = 0
+$total_files = $PBF_FILES.Count
+$stopwatch_total = [System.Diagnostics.Stopwatch]::StartNew()
+
 for ($i = 0; $i -lt $PBF_FILES.Count; $i++) {
     $file_index++
     $INPUT_FILE = $PBF_FILES[$i]
     $POLY_FILE = $POLY_FILES[$i]
     $ORIGINAL_NAME = $ORIGINAL_NAMES[$i]
     $file_name = Split-Path $INPUT_FILE -Leaf
-    
+
+    $pct = [math]::Floor(($i / $total_files) * 100)
+    Write-Progress -Activity "Generating maps" -Status "[$file_index/$total_files] $file_name" -PercentComplete $pct
+
     # Extract country code from original filename (first 2 characters)
     $COUNTRY_CODE = $ORIGINAL_NAME.Substring(0, 2)
-    
+
     # Extract product code from original filename (characters 2-5, 0-indexed)
     $PRODUCT_CODE = $ORIGINAL_NAME.Substring(2, 4)
-    
+
     # Extract date from PBF file before processing
     Write-Host "Extracting date from PBF file..."
     $date_string = Get-PbfDate $INPUT_FILE
-    
+
     Write-Host "=========================================="
-    Write-Host "Processing [$file_index/$($PBF_FILES.Count)]"
+    Write-Host "Processing [$file_index/$total_files]"
     Write-Host "  PBF File:      $file_name"
     Write-Host "  Poly File:     $(Split-Path $POLY_FILE -Leaf)"
     Write-Host "  Original Name: $ORIGINAL_NAME"
@@ -369,22 +392,24 @@ for ($i = 0; $i -lt $PBF_FILES.Count; $i++) {
     Write-Host "  Product Code:  $PRODUCT_CODE"
     Write-Host "  PBF Date:      $date_string"
     Write-Host "=========================================="
-    
+
     $OUTPUT_FILE = Join-Path $OUTPUT_DIR "out_$file_index.map"
-    
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host "Running osmosis..."
     & $OSMOSIS_WRAPPER `
         --read-pbf-fast "file=$INPUT_FILE" `
         --bounding-polygon "file=$POLY_FILE" `
         --tag-transform "file=$TAG_TRANSFORM_FILE" `
-        --mapfile-writer "file=$OUTPUT_FILE" type=hd zoom-interval-conf=13,13,13,14,14,14 threads=$THREADS tag-conf-file="$TAG_CONF_FILE"
-    
+        --mapfile-writer "file=$OUTPUT_FILE" type=$MAP_WRITER_TYPE zoom-interval-conf=13,13,13,14,14,14 threads=$THREADS tag-conf-file="$TAG_CONF_FILE"
+    $stopwatch.Stop()
+
     if (-not (Test-Path $OUTPUT_FILE)) {
         Write-Warning "Osmosis did not generate file for: $file_name - skipping"
         continue
     }
-    
-    Write-Host "Osmosis completed. Generating name..."
+
+    Write-Host "Osmosis completed in $([math]::Round($stopwatch.Elapsed.TotalMinutes, 1)) minutes. Generating name..."
     
     try {
         $stream = [System.IO.File]::OpenRead($OUTPUT_FILE)
@@ -442,6 +467,9 @@ for ($i = 0; $i -lt $PBF_FILES.Count; $i++) {
     }
 }
 
+Write-Progress -Activity "Generating maps" -Completed
+$stopwatch_total.Stop()
+
 Write-Host "=========================================="
-Write-Host "Done! Processed $($PBF_FILES.Count) files."
+Write-Host "Done! Processed $total_files files in $([math]::Round($stopwatch_total.Elapsed.TotalMinutes, 1)) minutes."
 Write-Host "=========================================="
