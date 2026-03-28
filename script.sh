@@ -57,12 +57,11 @@ fi
 
 TAG_CONF_FILE="$SCRIPT_DIR/tag-igpsport.xml"
 TAG_TRANSFORM_FILE="$SCRIPT_DIR/tag-igpsport-transform.xml"
-THREADS="${MAP_WRITER_THREADS:-4}"
-MAP_WRITER_TYPE="${MAP_WRITER_TYPE:-hd}"
+THREADS="${MAP_WRITER_THREADS:-}"
+MAP_WRITER_TYPE="${MAP_WRITER_TYPE:-auto}"
 TMP_DIR="${JAVA_TMP_DIR:-$SCRIPT_DIR/tmp}"
-JAVA_XMS="${JAVA_XMS:-1g}"
-JAVA_XMX="${JAVA_XMX:-8g}"
-export JAVA_OPTS="-Xms$JAVA_XMS -Xmx$JAVA_XMX -Djava.io.tmpdir=$TMP_DIR"
+JAVA_XMS="${JAVA_XMS:-}"
+JAVA_XMX="${JAVA_XMX:-}"
 export CLASSPATH="$OSMOSIS_DIR/lib/mapsforge-map-writer-${MAPSFORGE_WRITER_VERSION}-jar-with-dependencies.jar:$CLASSPATH"
 
 # Create directories
@@ -145,9 +144,14 @@ echo "=========================================="
 echo ""
 echo "Mapsforge configuration:"
 echo "  Writer Type:  $MAP_WRITER_TYPE"
-echo "  Threads:      $THREADS"
-echo "  Java Heap:    -Xms$JAVA_XMS -Xmx$JAVA_XMX"
+echo "  Threads:      ${THREADS:-auto}"
+if [ -n "$JAVA_XMS" ] || [ -n "$JAVA_XMX" ]; then
+    echo "  Java Heap:    -Xms$JAVA_XMS -Xmx$JAVA_XMX"
+else
+    echo "  Java Heap:    auto"
+fi
 echo "  Java tmpdir:  $TMP_DIR"
+echo "  Fallback:     auto retries with hd if the ram attempt fails"
 echo ""
 
 if [ ! -f "$TAG_CONF_FILE" ]; then
@@ -346,6 +350,98 @@ get_geo_name() {
     echo "$(convert_to_base36 $x_start 3)$(convert_to_base36 $y_start 3)$(convert_to_base36 $((x_span - 1)) 3)$(convert_to_base36 $((y_span - 1)) 3)"
 }
 
+get_total_physical_memory_bytes() {
+    if [ -r /proc/meminfo ]; then
+        awk '/MemTotal:/ {print $2 * 1024; exit}' /proc/meminfo
+        return
+    fi
+
+    if command -v sysctl >/dev/null 2>&1; then
+        sysctl -n hw.memsize 2>/dev/null
+        return
+    fi
+
+    echo 0
+}
+
+bytes_to_heap_string() {
+    local bytes="$1"
+    local gigabytes=$((bytes / 1024 / 1024 / 1024))
+    if [ "$gigabytes" -lt 1 ]; then
+        gigabytes=1
+    fi
+    echo "${gigabytes}g"
+}
+
+heap_string_to_bytes() {
+    local value
+    value=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+    case "$value" in
+        *g) echo $(( ${value%g} * 1024 * 1024 * 1024 )) ;;
+        *m) echo $(( ${value%m} * 1024 * 1024 )) ;;
+        *) echo "$value" ;;
+    esac
+}
+
+get_auto_map_writer_config() {
+    local pbf_size_bytes="$1"
+    local total_physical_bytes="$2"
+
+    if [ "$pbf_size_bytes" -le $((350 * 1024 * 1024)) ]; then
+        preferred="ram|2|2g|6g"
+    elif [ "$pbf_size_bytes" -le $((700 * 1024 * 1024)) ]; then
+        preferred="ram|2|3g|8g"
+    elif [ "$pbf_size_bytes" -le $((1024 * 1024 * 1024)) ]; then
+        preferred="ram|1|4g|12g"
+    else
+        preferred="ram|1|6g|16g"
+    fi
+
+    IFS='|' read -r preferred_writer preferred_threads preferred_java_xms preferred_java_xmx <<< "$preferred"
+
+    min_ram_heap_bytes=$((4 * 1024 * 1024 * 1024))
+    max_auto_heap_bytes=$((total_physical_bytes * 8 / 10))
+    requested_heap_bytes=$(heap_string_to_bytes "$preferred_java_xmx")
+
+    if [ "$max_auto_heap_bytes" -lt "$min_ram_heap_bytes" ]; then
+        echo "hd|1|2g|8g|fallback_to_hd_due_to_total_ram_cap"
+        return
+    fi
+
+    if [ "$requested_heap_bytes" -gt "$max_auto_heap_bytes" ]; then
+        effective_java_xmx=$(bytes_to_heap_string "$max_auto_heap_bytes")
+        if [ "$(heap_string_to_bytes "$preferred_java_xms")" -gt "$max_auto_heap_bytes" ]; then
+            effective_java_xms="$effective_java_xmx"
+        else
+            effective_java_xms="$preferred_java_xms"
+        fi
+        echo "ram|$preferred_threads|$effective_java_xms|$effective_java_xmx|ram_capped_by_total_ram"
+        return
+    fi
+
+    echo "${preferred}|preferred_ram"
+}
+
+get_hd_config() {
+    echo "hd|1|2g|8g"
+}
+
+run_osmosis_map_writer() {
+    local writer_type="$1"
+    local threads="$2"
+    local java_xms="$3"
+    local java_xmx="$4"
+
+    export JAVA_OPTS="-Xms$java_xms -Xmx$java_xmx -Djava.io.tmpdir=$TMP_DIR"
+    rm -f "$OUTPUT_FILE"
+
+    "$OSMOSIS_DIR/bin/osmosis-with-mapsforge" \
+        --read-pbf-fast file="$INPUT_FILE" \
+        --bounding-polygon file="$POLY_FILE" \
+        --tag-transform file="$TAG_TRANSFORM_FILE" \
+        --mapfile-writer file="$OUTPUT_FILE" type="$writer_type" zoom-interval-conf=13,13,13,14,14,14 threads="$threads" tag-conf-file="$TAG_CONF_FILE"
+}
+
 file_index=0
 for i in "${!PBF_FILES[@]}"; do
     file_index=$((file_index + 1))
@@ -353,6 +449,26 @@ for i in "${!PBF_FILES[@]}"; do
     POLY_FILE="${POLY_FILES[$i]}"
     ORIGINAL_NAME="${ORIGINAL_NAMES[$i]}"
     file_name=$(basename "$INPUT_FILE")
+    pbf_size_bytes=$(wc -c < "$INPUT_FILE" | tr -d ' ')
+    pbf_size_mb=$((pbf_size_bytes / 1024 / 1024))
+    total_physical_bytes=$(get_total_physical_memory_bytes)
+    total_physical_gb=$(awk -v total="$total_physical_bytes" 'BEGIN { printf("%.2f", total / 1024 / 1024 / 1024) }')
+    IFS='|' read -r auto_writer_type auto_threads auto_java_xms auto_java_xmx auto_reason <<< "$(get_auto_map_writer_config "$pbf_size_bytes" "$total_physical_bytes")"
+    requested_writer_type="$MAP_WRITER_TYPE"
+    if [ "$requested_writer_type" = "auto" ]; then
+        requested_writer_type="$auto_writer_type"
+    fi
+    if [ "$requested_writer_type" = "hd" ]; then
+        IFS='|' read -r base_writer_type base_threads base_java_xms base_java_xmx <<< "$(get_hd_config)"
+    else
+        base_writer_type="$auto_writer_type"
+        base_threads="$auto_threads"
+        base_java_xms="$auto_java_xms"
+        base_java_xmx="$auto_java_xmx"
+    fi
+    effective_threads="${THREADS:-$base_threads}"
+    effective_java_xms="${JAVA_XMS:-$base_java_xms}"
+    effective_java_xmx="${JAVA_XMX:-$base_java_xmx}"
     
     # Extract country code from original filename (first 2 characters)
     COUNTRY_CODE="${ORIGINAL_NAME:0:2}"
@@ -372,20 +488,56 @@ for i in "${!PBF_FILES[@]}"; do
     echo "  Country Code:  $COUNTRY_CODE"
     echo "  Product Code:  $PRODUCT_CODE"
     echo "  PBF Date:      $date_string"
+    echo "  PBF Size:      ${pbf_size_mb} MB"
+    echo "  Total RAM:     ${total_physical_gb} GB"
+    echo "  Writer Type:   $requested_writer_type"
+    echo "  Threads:       $effective_threads"
+    echo "  Java Heap:     -Xms$effective_java_xms -Xmx$effective_java_xmx"
+    if [ "$MAP_WRITER_TYPE" = "auto" ]; then
+        if [ "$auto_reason" = "ram_capped_by_total_ram" ]; then
+            echo "  Auto Decision: ram profile capped to 80% of installed RAM, then retry with hd if needed"
+        elif [ "$auto_reason" = "fallback_to_hd_due_to_total_ram_cap" ]; then
+            echo "  Auto Decision: total RAM too small for a useful ram profile, using hd"
+        else
+            echo "  Auto Decision: try ram first and retry with hd if needed"
+        fi
+    fi
     echo "=========================================="
     
     OUTPUT_FILE="$OUTPUT_DIR/out_$file_index.map"
     
     echo "Running osmosis..."
-    "$OSMOSIS_DIR/bin/osmosis-with-mapsforge" \
-        --read-pbf-fast file="$INPUT_FILE" \
-        --bounding-polygon file="$POLY_FILE" \
-        --tag-transform file="$TAG_TRANSFORM_FILE" \
-        --mapfile-writer file="$OUTPUT_FILE" type="$MAP_WRITER_TYPE" zoom-interval-conf=13,13,13,14,14,14 threads="$THREADS" tag-conf-file="$TAG_CONF_FILE"
+    run_osmosis_map_writer "$requested_writer_type" "$effective_threads" "$effective_java_xms" "$effective_java_xmx"
+    run_status=$?
+    final_writer_type="$requested_writer_type"
+    final_threads="$effective_threads"
+    final_java_xms="$effective_java_xms"
+    final_java_xmx="$effective_java_xmx"
+
+    if [ $run_status -ne 0 ] && [ "$MAP_WRITER_TYPE" = "auto" ] && [ "$requested_writer_type" = "ram" ]; then
+        IFS='|' read -r hd_writer_type hd_threads hd_java_xms hd_java_xmx <<< "$(get_hd_config)"
+        fallback_threads="${THREADS:-$hd_threads}"
+        fallback_java_xms="${JAVA_XMS:-$hd_java_xms}"
+        fallback_java_xmx="${JAVA_XMX:-$hd_java_xmx}"
+        echo "WARNING: RAM writer attempt failed for $file_name. Retrying with hd..."
+        run_osmosis_map_writer "hd" "$fallback_threads" "$fallback_java_xms" "$fallback_java_xmx"
+        run_status=$?
+
+        if [ $run_status -eq 0 ]; then
+            final_writer_type="hd"
+            final_threads="$fallback_threads"
+            final_java_xms="$fallback_java_xms"
+            final_java_xmx="$fallback_java_xmx"
+        fi
+    fi
     
-    if [ ! -f "$OUTPUT_FILE" ]; then
+    if [ $run_status -ne 0 ] || [ ! -f "$OUTPUT_FILE" ]; then
         echo "WARNING: Osmosis did not generate file for: $file_name - skipping"
         continue
+    fi
+
+    if [ "$final_writer_type" != "$requested_writer_type" ]; then
+        echo "Completed with fallback writer: $final_writer_type (threads=$final_threads, heap=-Xms$final_java_xms -Xmx$final_java_xmx)"
     fi
     
     echo "Osmosis completed. Generating name..."

@@ -3,6 +3,29 @@ $ProgressPreference = "SilentlyContinue"
 
 $SCRIPT_DIR = $PSScriptRoot
 
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class CodexMemoryStatus {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    public struct MEMORYSTATUSEX {
+        public uint dwLength;
+        public uint dwMemoryLoad;
+        public ulong ullTotalPhys;
+        public ulong ullAvailPhys;
+        public ulong ullTotalPageFile;
+        public ulong ullAvailPageFile;
+        public ulong ullTotalVirtual;
+        public ulong ullAvailVirtual;
+        public ulong ullAvailExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+}
+"@
+
 # Download and extract osmosis if not present
 $OSMOSIS_VERSION = "0.49.2"
 $OSMOSIS_DIR = Join-Path $SCRIPT_DIR "osmosis-$OSMOSIS_VERSION"
@@ -51,12 +74,11 @@ if (-not (Test-Path $OSMOSIS_WRAPPER)) {
 
 $TAG_CONF_FILE = Join-Path $SCRIPT_DIR "tag-igpsport.xml"
 $TAG_TRANSFORM_FILE = Join-Path $SCRIPT_DIR "tag-igpsport-transform.xml"
-$THREADS = if ($env:MAP_WRITER_THREADS) { [int]$env:MAP_WRITER_THREADS } else { 4 }
-$MAP_WRITER_TYPE = if ($env:MAP_WRITER_TYPE) { $env:MAP_WRITER_TYPE } else { "hd" }
+$THREADS = if ($env:MAP_WRITER_THREADS) { [int]$env:MAP_WRITER_THREADS } else { $null }
+$MAP_WRITER_TYPE = if ($env:MAP_WRITER_TYPE) { $env:MAP_WRITER_TYPE } else { "auto" }
 $TMP_DIR = if ($env:JAVA_TMP_DIR) { $env:JAVA_TMP_DIR } else { (Join-Path $SCRIPT_DIR "tmp") }
-$JAVA_XMS = if ($env:JAVA_XMS) { $env:JAVA_XMS } else { "1g" }
-$JAVA_XMX = if ($env:JAVA_XMX) { $env:JAVA_XMX } else { "8g" }
-$env:JAVA_OPTS = "-Xms$JAVA_XMS -Xmx$JAVA_XMX -Djava.io.tmpdir=$TMP_DIR"
+$JAVA_XMS = if ($env:JAVA_XMS) { $env:JAVA_XMS } else { $null }
+$JAVA_XMX = if ($env:JAVA_XMX) { $env:JAVA_XMX } else { $null }
 $env:CLASSPATH = "$MAPSFORGE_WRITER_JAR;$env:CLASSPATH"
 
 # Create directories
@@ -142,9 +164,10 @@ Write-Host "=========================================="
 Write-Host ""
 Write-Host "Mapsforge configuration:"
 Write-Host "  Writer Type:  $MAP_WRITER_TYPE"
-Write-Host "  Threads:      $THREADS"
-Write-Host "  Java Heap:    -Xms$JAVA_XMS -Xmx$JAVA_XMX"
+Write-Host "  Threads:      $(if ($THREADS) { $THREADS } else { 'auto' })"
+Write-Host "  Java Heap:    $(if ($JAVA_XMS -or $JAVA_XMX) { "-Xms$JAVA_XMS -Xmx$JAVA_XMX" } else { 'auto' })"
 Write-Host "  Java tmpdir:  $TMP_DIR"
+Write-Host "  Fallback:     auto retries with hd if the ram attempt fails"
 Write-Host ""
 
 if (-not (Test-Path $TAG_CONF_FILE)) {
@@ -359,6 +382,162 @@ function Get-GeoName {
     return "$(Convert-ToBase36 $x_start 3)$(Convert-ToBase36 $y_start 3)$(Convert-ToBase36 ($x_span - 1) 3)$(Convert-ToBase36 ($y_span - 1) 3)"
 }
 
+function Get-PhysicalMemoryStatus {
+    $mem = New-Object CodexMemoryStatus+MEMORYSTATUSEX
+    $mem.dwLength = [System.Runtime.InteropServices.Marshal]::SizeOf($mem)
+
+    if (-not [CodexMemoryStatus]::GlobalMemoryStatusEx([ref]$mem)) {
+        throw "Unable to query physical memory status."
+    }
+
+    return @{
+        TotalBytes = [int64]$mem.ullTotalPhys
+        AvailableBytes = [int64]$mem.ullAvailPhys
+        MemoryLoadPercent = [int]$mem.dwMemoryLoad
+    }
+}
+
+function Convert-HeapStringToBytes {
+    param([string]$heapValue)
+
+    if (-not $heapValue) {
+        return 0
+    }
+
+    $normalized = $heapValue.Trim().ToLowerInvariant()
+    if ($normalized.EndsWith("g")) {
+        return [int64]([double]$normalized.TrimEnd('g') * 1GB)
+    }
+    if ($normalized.EndsWith("m")) {
+        return [int64]([double]$normalized.TrimEnd('m') * 1MB)
+    }
+
+    return [int64]$normalized
+}
+
+function Convert-BytesToHeapString {
+    param([int64]$bytes)
+
+    $gigabytes = [math]::Floor($bytes / 1GB)
+    if ($gigabytes -lt 1) {
+        $gigabytes = 1
+    }
+
+    return "${gigabytes}g"
+}
+
+function Get-AutoMapWriterConfig {
+    param([int64]$pbfSizeBytes, [int64]$totalPhysicalBytes)
+
+    $sizeMb = [math]::Round($pbfSizeBytes / 1MB, 1)
+    $totalGb = [math]::Round($totalPhysicalBytes / 1GB, 2)
+
+    if ($pbfSizeBytes -le 350MB) {
+        $preferred = @{
+            WriterType = "ram"
+            Threads = 2
+            JavaXms = "2g"
+            JavaXmx = "6g"
+        }
+    }
+    elseif ($pbfSizeBytes -le 700MB) {
+        $preferred = @{
+            WriterType = "ram"
+            Threads = 2
+            JavaXms = "3g"
+            JavaXmx = "8g"
+        }
+    }
+    elseif ($pbfSizeBytes -le 1GB) {
+        $preferred = @{
+            WriterType = "ram"
+            Threads = 1
+            JavaXms = "4g"
+            JavaXmx = "12g"
+        }
+    }
+    else {
+        $preferred = @{
+            WriterType = "ram"
+            Threads = 1
+            JavaXms = "6g"
+            JavaXmx = "16g"
+        }
+    }
+
+    $minRamHeapBytes = 4GB
+    $maxAutoHeapBytes = [int64][math]::Floor($totalPhysicalBytes * 0.8)
+    $requestedHeapBytes = Convert-HeapStringToBytes $preferred.JavaXmx
+
+    if ($maxAutoHeapBytes -lt $minRamHeapBytes) {
+        return @{
+            WriterType = "hd"
+            Threads = 1
+            JavaXms = "2g"
+            JavaXmx = "8g"
+            SizeMb = $sizeMb
+            TotalGb = $totalGb
+            Reason = "fallback_to_hd_due_to_total_ram_cap"
+        }
+    }
+
+    $effectiveHeapBytes = [math]::Min($requestedHeapBytes, $maxAutoHeapBytes)
+    $effectiveJavaXmx = Convert-BytesToHeapString $effectiveHeapBytes
+    $effectiveJavaXms = if ((Convert-HeapStringToBytes $preferred.JavaXms) -gt $effectiveHeapBytes) {
+        $effectiveJavaXmx
+    } else {
+        $preferred.JavaXms
+    }
+
+    return @{
+        WriterType = "ram"
+        Threads = $preferred.Threads
+        JavaXms = $effectiveJavaXms
+        JavaXmx = $effectiveJavaXmx
+        SizeMb = $sizeMb
+        TotalGb = $totalGb
+        Reason = if ($effectiveHeapBytes -lt $requestedHeapBytes) { "ram_capped_by_total_ram" } else { "preferred_ram" }
+    }
+}
+
+function Get-HdConfig {
+    return @{
+        WriterType = "hd"
+        Threads = 1
+        JavaXms = "2g"
+        JavaXmx = "8g"
+    }
+}
+
+function Invoke-OsmosisMapWriter {
+    param(
+        [string]$osmosisWrapper,
+        [string]$inputFile,
+        [string]$polyFile,
+        [string]$tagTransformFile,
+        [string]$outputFile,
+        [string]$tagConfFile,
+        [string]$writerType,
+        [int]$threads,
+        [string]$javaXms,
+        [string]$javaXmx
+    )
+
+    $env:JAVA_OPTS = "-Xms$javaXms -Xmx$javaXmx -Djava.io.tmpdir=$TMP_DIR"
+
+    if (Test-Path $outputFile) {
+        Remove-Item $outputFile -Force
+    }
+
+    & $osmosisWrapper `
+        --read-pbf-fast "file=$inputFile" `
+        --bounding-polygon "file=$polyFile" `
+        --tag-transform "file=$tagTransformFile" `
+        --mapfile-writer "file=$outputFile" type=$writerType zoom-interval-conf=13,13,13,14,14,14 threads=$threads tag-conf-file="$tagConfFile"
+
+    return ($LASTEXITCODE -eq 0 -and (Test-Path $outputFile))
+}
+
 $file_index = 0
 $total_files = $PBF_FILES.Count
 $stopwatch_total = [System.Diagnostics.Stopwatch]::StartNew()
@@ -372,6 +551,15 @@ for ($i = 0; $i -lt $PBF_FILES.Count; $i++) {
 
     $pct = [math]::Floor(($i / $total_files) * 100)
     Write-Progress -Activity "Generating maps" -Status "[$file_index/$total_files] $file_name" -PercentComplete $pct
+
+    $inputInfo = Get-Item $INPUT_FILE
+    $memoryStatus = Get-PhysicalMemoryStatus
+    $autoConfig = Get-AutoMapWriterConfig $inputInfo.Length $memoryStatus.TotalBytes
+    $requestedWriterType = if ($MAP_WRITER_TYPE -eq "auto") { $autoConfig.WriterType } else { $MAP_WRITER_TYPE }
+    $baseConfig = if ($requestedWriterType -eq "hd") { Get-HdConfig } else { $autoConfig }
+    $effectiveThreads = if ($THREADS) { $THREADS } else { $baseConfig.Threads }
+    $effectiveJavaXms = if ($JAVA_XMS) { $JAVA_XMS } else { $baseConfig.JavaXms }
+    $effectiveJavaXmx = if ($JAVA_XMX) { $JAVA_XMX } else { $baseConfig.JavaXmx }
 
     # Extract country code from original filename (first 2 characters)
     $COUNTRY_CODE = $ORIGINAL_NAME.Substring(0, 2)
@@ -391,22 +579,79 @@ for ($i = 0; $i -lt $PBF_FILES.Count; $i++) {
     Write-Host "  Country Code:  $COUNTRY_CODE"
     Write-Host "  Product Code:  $PRODUCT_CODE"
     Write-Host "  PBF Date:      $date_string"
+    Write-Host "  PBF Size:      $($autoConfig.SizeMb) MB"
+    Write-Host "  Total RAM:     $($autoConfig.TotalGb) GB"
+    Write-Host "  Writer Type:   $requestedWriterType"
+    Write-Host "  Threads:       $effectiveThreads"
+    Write-Host "  Java Heap:     -Xms$effectiveJavaXms -Xmx$effectiveJavaXmx"
+    if ($MAP_WRITER_TYPE -eq "auto") {
+        if ($autoConfig.Reason -eq "ram_capped_by_total_ram") {
+            Write-Host "  Auto Decision: ram profile capped to 80% of installed RAM, then retry with hd if needed"
+        }
+        elseif ($autoConfig.Reason -eq "fallback_to_hd_due_to_total_ram_cap") {
+            Write-Host "  Auto Decision: total RAM too small for a useful ram profile, using hd"
+        }
+        else {
+            Write-Host "  Auto Decision: try ram first and retry with hd if needed"
+        }
+    }
     Write-Host "=========================================="
 
     $OUTPUT_FILE = Join-Path $OUTPUT_DIR "out_$file_index.map"
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host "Running osmosis..."
-    & $OSMOSIS_WRAPPER `
-        --read-pbf-fast "file=$INPUT_FILE" `
-        --bounding-polygon "file=$POLY_FILE" `
-        --tag-transform "file=$TAG_TRANSFORM_FILE" `
-        --mapfile-writer "file=$OUTPUT_FILE" type=$MAP_WRITER_TYPE zoom-interval-conf=13,13,13,14,14,14 threads=$THREADS tag-conf-file="$TAG_CONF_FILE"
+    $runSucceeded = Invoke-OsmosisMapWriter `
+        -osmosisWrapper $OSMOSIS_WRAPPER `
+        -inputFile $INPUT_FILE `
+        -polyFile $POLY_FILE `
+        -tagTransformFile $TAG_TRANSFORM_FILE `
+        -outputFile $OUTPUT_FILE `
+        -tagConfFile $TAG_CONF_FILE `
+        -writerType $requestedWriterType `
+        -threads $effectiveThreads `
+        -javaXms $effectiveJavaXms `
+        -javaXmx $effectiveJavaXmx
+
+    $finalWriterType = $requestedWriterType
+    $finalThreads = $effectiveThreads
+    $finalJavaXms = $effectiveJavaXms
+    $finalJavaXmx = $effectiveJavaXmx
+
+    if (-not $runSucceeded -and $MAP_WRITER_TYPE -eq "auto" -and $requestedWriterType -eq "ram") {
+        $hdConfig = Get-HdConfig
+        $fallbackThreads = if ($THREADS) { $THREADS } else { $hdConfig.Threads }
+        $fallbackJavaXms = if ($JAVA_XMS) { $JAVA_XMS } else { $hdConfig.JavaXms }
+        $fallbackJavaXmx = if ($JAVA_XMX) { $JAVA_XMX } else { $hdConfig.JavaXmx }
+        Write-Warning "RAM writer attempt failed for $file_name. Retrying with hd..."
+        $runSucceeded = Invoke-OsmosisMapWriter `
+            -osmosisWrapper $OSMOSIS_WRAPPER `
+            -inputFile $INPUT_FILE `
+            -polyFile $POLY_FILE `
+            -tagTransformFile $TAG_TRANSFORM_FILE `
+            -outputFile $OUTPUT_FILE `
+            -tagConfFile $TAG_CONF_FILE `
+            -writerType "hd" `
+            -threads $fallbackThreads `
+            -javaXms $fallbackJavaXms `
+            -javaXmx $fallbackJavaXmx
+
+        if ($runSucceeded) {
+            $finalWriterType = "hd"
+            $finalThreads = $fallbackThreads
+            $finalJavaXms = $fallbackJavaXms
+            $finalJavaXmx = $fallbackJavaXmx
+        }
+    }
     $stopwatch.Stop()
 
-    if (-not (Test-Path $OUTPUT_FILE)) {
+    if (-not $runSucceeded) {
         Write-Warning "Osmosis did not generate file for: $file_name - skipping"
         continue
+    }
+
+    if ($finalWriterType -ne $requestedWriterType) {
+        Write-Host "Completed with fallback writer: $finalWriterType (threads=$finalThreads, heap=-Xms$finalJavaXms -Xmx$finalJavaXmx)"
     }
 
     Write-Host "Osmosis completed in $([math]::Round($stopwatch.Elapsed.TotalMinutes, 1)) minutes. Generating name..."
