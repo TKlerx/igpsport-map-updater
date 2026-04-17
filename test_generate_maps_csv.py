@@ -11,10 +11,12 @@ from generate_maps_csv import (
     bbox_area,
     bbox_from_geometry,
     bbox_overlap_area,
+    build_region_lookup,
     decode_geocode,
     find_best_match,
     parse_filename,
     pbf_url_to_poly_url,
+    region_country_codes,
     tile_x_to_lon,
     tile_y_to_lat,
 )
@@ -233,6 +235,12 @@ def _make_region(name, region_id, bbox, parent="germany"):
     }
 
 
+def _make_country(name, region_id, bbox, iso_code, parent="europe"):
+    region = _make_region(name, region_id, bbox, parent=parent)
+    region["properties"]["iso3166-1:alpha2"] = [iso_code]
+    return region
+
+
 class TestFindBestMatch:
     def test_exact_match(self):
         regions = [_make_region("Hessen", "hessen", (7.7, 49.4, 10.3, 51.7))]
@@ -286,6 +294,37 @@ class TestFindBestMatch:
         # Map bbox that mostly falls outside the small region
         match = find_best_match((5.0, 47.0, 15.0, 55.0), regions)
         assert match["feature"]["properties"]["id"] == "large"
+
+    def test_prefers_same_country_via_parent_chain(self):
+        regions = [
+            _make_country("Czech Republic", "czech-republic", (12.0, 48.0, 19.0, 51.5), "CZ"),
+            _make_country("Germany", "germany", (5.0, 47.0, 15.5, 55.0), "DE"),
+            _make_region("Jihočeský kraj", "jihocesky", (13.0, 48.4, 15.6, 49.9), parent="czech-republic"),
+            _make_region("Bayern", "bayern", (11.9, 47.2, 13.5, 50.6), parent="germany"),
+        ]
+        match = find_best_match((12.04, 49.87, 13.36, 50.49), regions, country_code="CZ")
+        assert match is not None
+        assert match["feature"]["properties"]["id"] != "bayern"
+
+    def test_falls_back_to_foreign_region_when_no_same_country_exists(self):
+        regions = [
+            _make_country("Germany", "germany", (5.0, 47.0, 15.5, 55.0), "DE"),
+            _make_region("Bayern", "bayern", (11.9, 47.2, 13.5, 50.6), parent="germany"),
+        ]
+        match = find_best_match((12.04, 49.87, 13.36, 50.49), regions, country_code="CZ")
+        assert match is not None
+        assert match["feature"]["properties"]["id"] == "bayern"
+
+
+class TestRegionCountryCodes:
+    def test_resolves_country_code_from_parent_chain(self):
+        regions = [
+            _make_country("Czech Republic", "czech-republic", (12.0, 48.0, 19.0, 51.5), "CZ"),
+            _make_region("Jihočeský kraj", "jihocesky", (13.0, 48.4, 15.6, 49.9), parent="czech-republic"),
+        ]
+        lookup = build_region_lookup(regions)
+        codes = region_country_codes(regions[1], lookup)
+        assert codes == {"CZ"}
 
 
 # --- integration: parse real filenames and verify bounding boxes ---

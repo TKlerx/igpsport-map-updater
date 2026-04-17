@@ -431,6 +431,9 @@ function Get-AutoMapWriterConfig {
 
     $sizeMb = [math]::Round($pbfSizeBytes / 1MB, 1)
     $totalGb = [math]::Round($totalPhysicalBytes / 1GB, 2)
+    $minRamHeapBytes = 4GB
+    $maxAutoHeapBytes = [int64][math]::Floor($totalPhysicalBytes * 2 / 3)
+    $maxAutoHeapString = Convert-BytesToHeapString $maxAutoHeapBytes
 
     if ($pbfSizeBytes -le 350MB) {
         $preferred = @{
@@ -452,21 +455,18 @@ function Get-AutoMapWriterConfig {
         $preferred = @{
             WriterType = "ram"
             Threads = 1
-            JavaXms = "4g"
-            JavaXmx = "12g"
+            JavaXms = "6g"
+            JavaXmx = $maxAutoHeapString
         }
     }
     else {
         $preferred = @{
             WriterType = "ram"
             Threads = 1
-            JavaXms = "6g"
-            JavaXmx = "16g"
+            JavaXms = "8g"
+            JavaXmx = $maxAutoHeapString
         }
     }
-
-    $minRamHeapBytes = 4GB
-    $maxAutoHeapBytes = [int64][math]::Floor($totalPhysicalBytes * 0.8)
     $requestedHeapBytes = Convert-HeapStringToBytes $preferred.JavaXmx
 
     if ($maxAutoHeapBytes -lt $minRamHeapBytes) {

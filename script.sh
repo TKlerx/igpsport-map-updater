@@ -386,21 +386,23 @@ heap_string_to_bytes() {
 get_auto_map_writer_config() {
     local pbf_size_bytes="$1"
     local total_physical_bytes="$2"
+    local min_ram_heap_bytes=$((4 * 1024 * 1024 * 1024))
+    local max_auto_heap_bytes=$((total_physical_bytes * 2 / 3))
+    local max_auto_heap_string
+    max_auto_heap_string=$(bytes_to_heap_string "$max_auto_heap_bytes")
 
     if [ "$pbf_size_bytes" -le $((350 * 1024 * 1024)) ]; then
         preferred="ram|2|2g|6g"
     elif [ "$pbf_size_bytes" -le $((700 * 1024 * 1024)) ]; then
         preferred="ram|2|3g|8g"
     elif [ "$pbf_size_bytes" -le $((1024 * 1024 * 1024)) ]; then
-        preferred="ram|1|4g|12g"
+        preferred="ram|1|6g|$max_auto_heap_string"
     else
-        preferred="ram|1|6g|16g"
+        preferred="ram|1|8g|$max_auto_heap_string"
     fi
 
     IFS='|' read -r preferred_writer preferred_threads preferred_java_xms preferred_java_xmx <<< "$preferred"
 
-    min_ram_heap_bytes=$((4 * 1024 * 1024 * 1024))
-    max_auto_heap_bytes=$((total_physical_bytes * 8 / 10))
     requested_heap_bytes=$(heap_string_to_bytes "$preferred_java_xmx")
 
     if [ "$max_auto_heap_bytes" -lt "$min_ram_heap_bytes" ]; then

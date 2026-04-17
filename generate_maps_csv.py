@@ -150,16 +150,54 @@ def fetch_geofabrik_index():
     return data
 
 
-def find_best_match(map_bbox, regions):
+def build_region_lookup(regions):
+    """Build a lookup from Geofabrik region id to feature."""
+    lookup = {}
+    for region in regions:
+        props = region.get("properties", {})
+        region_id = props.get("id")
+        if region_id:
+            lookup[region_id] = region
+    return lookup
+
+
+def region_country_codes(region, region_lookup):
+    """Resolve ISO alpha-2 country codes through the parent chain."""
+    props = region.get("properties", {})
+    visited = set()
+
+    while props:
+        iso_codes = props.get("iso3166-1:alpha2")
+        if iso_codes:
+            return set(iso_codes)
+
+        parent_id = props.get("parent")
+        if not parent_id or parent_id in visited:
+            break
+
+        visited.add(parent_id)
+        parent = region_lookup.get(parent_id)
+        if not parent:
+            break
+
+        props = parent.get("properties", {})
+
+    return set()
+
+
+def find_best_match(map_bbox, regions, country_code=None):
     """Find the best matching Geofabrik region for a bounding box.
 
     Strategy: find the region with the highest overlap ratio (overlap / map_area)
     that is also reasonably small (prefer specific regions over continents).
+    If a country code is available from the original filename, prefer regions
+    whose Geofabrik parent chain resolves to that same country.
     """
     map_area = bbox_area(map_bbox)
     if map_area == 0:
         return None
 
+    region_lookup = build_region_lookup(regions)
     candidates = []
 
     for region in regions:
@@ -182,10 +220,19 @@ def find_best_match(map_bbox, regions):
             "overlap_ratio": overlap_ratio,
             "region_area": region_area,
             "region_bbox": region_bbox,
+            "country_codes": region_country_codes(region, region_lookup),
         })
 
     if not candidates:
         return None
+
+    if country_code:
+        same_country = [
+            c for c in candidates
+            if country_code in c["country_codes"]
+        ]
+        if same_country:
+            candidates = same_country
 
     # Sort by: high overlap ratio first, then smallest region (most specific)
     candidates.sort(key=lambda c: (-c["overlap_ratio"], c["region_area"]))
@@ -248,7 +295,7 @@ def main():
     csv_rows = []
     for mf in map_files:
         print(f"Matching {mf['filename']}...")
-        match = find_best_match(mf["bbox"], regions)
+        match = find_best_match(mf["bbox"], regions, country_code=mf["country_code"])
 
         if match is None:
             print(f"  WARNING: No matching region found! Skipping.")
