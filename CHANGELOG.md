@@ -6,6 +6,7 @@ This changelog documents notable changes made in this fork after diverging from 
 
 ### Added
 - Added `generate_maps_csv.py` to derive `maps.csv` entries from original iGPSport `.map` filenames.
+- Added `download_igpsport_maps.py` to list/download official iGPSPORT map ZIPs from the public support API.
 - Added `run.ps1` and `run.sh` for the full end-to-end workflow: generate `maps.csv`, then build new map files.
 - Added project metadata and dependency management via `pyproject.toml`, `.python-version`, and `uv.lock`.
 - Added automated tests for the CSV generator in `test_generate_maps_csv.py`.
@@ -26,6 +27,7 @@ This changelog documents notable changes made in this fork after diverging from 
 - Added original tile bounding-box clipping so broad Geofabrik sources do not generate duplicate macro-region maps for several product codes.
 - Tightened resume mode to skip only exact expected output filenames, including the original tile geocode.
 - Changed final output naming to preserve the original tile geocode while still updating the source date.
+- Removed the fixed 6 GB heap ceiling for small PBF files; all RAM auto profiles now use the capped heap.
 
 ### Notes
 - The generated filename geocode is now based on the actual bounding box stored in the generated `.map` file, so it may differ slightly from the original vendor filename when the produced map coverage differs.

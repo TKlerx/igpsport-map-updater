@@ -496,7 +496,7 @@ get_auto_map_writer_config() {
     max_auto_heap_string=$(bytes_to_heap_string "$max_auto_heap_bytes")
 
     if [ "$pbf_size_bytes" -le $((350 * 1024 * 1024)) ]; then
-        preferred="ram|2|2g|6g"
+        preferred="ram|2|2g|$max_auto_heap_string"
     elif [ "$pbf_size_bytes" -le $((700 * 1024 * 1024)) ]; then
         preferred="ram|1|3g|$max_auto_heap_string"
     elif [ "$pbf_size_bytes" -le $((1024 * 1024 * 1024)) ]; then

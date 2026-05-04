@@ -541,7 +541,7 @@ function Get-AutoMapWriterConfig {
             WriterType = "ram"
             Threads = 2
             JavaXms = "2g"
-            JavaXmx = "6g"
+            JavaXmx = $maxAutoHeapString
         }
     }
     elseif ($pbfSizeBytes -le 700MB) {

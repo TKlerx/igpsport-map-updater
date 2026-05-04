@@ -103,6 +103,16 @@ See the [Mapsforge tag-mapping reference](https://github.com/mapsforge/mapsforge
 
 Connect your iGPSport device via USB and copy all `.map` files from the device to a folder on your computer (e.g., `backup/`). **Keep this backup safe** — you'll need it if you ever want to revert.
 
+If you do not already have the original files, you can download official map ZIPs from the iGPSPORT support API:
+
+```bash
+python download_igpsport_maps.py europe switzerland --list
+python download_igpsport_maps.py europe switzerland --download -o input
+python download_igpsport_maps.py aargau --download -o input
+```
+
+The downloader uses the same public map tree as the iGPSPORT support page, saves the ZIPs, and extracts the contained `.map` files. Those extracted maps can then be used as the input directory for `run.ps1` / `run.sh`.
+
 ### 2. Run the updater
 
 The `run` script does everything in one go: it reads your original map filenames to figure out which regions you need, generates `maps.csv`, downloads the latest OpenStreetMap data, and generates updated `.map` files in the `output/` directory.
@@ -170,6 +180,7 @@ By default, the generator now uses an adaptive Mapsforge configuration:
 - It caps Java heap to about two thirds of installed RAM.
 - It does not fall back to the disk-backed (`hd`) writer unless explicitly enabled.
 - It sizes RAM heuristics from the total source size for that map row, including multi-region blends.
+- It uses the capped heap even for small extracts, because OSM density can matter more than PBF file size.
 
 You can still override this manually with `MAP_WRITER_TYPE`, `MAP_WRITER_THREADS`, `JAVA_XMS`, `JAVA_XMX`, and `JAVA_TMP_DIR`. If you want the old slow-but-stubborn HD retry behavior, set `MAP_ALLOW_HD_FALLBACK=1`.
 
@@ -241,6 +252,7 @@ igpsport-map-updater/
 ├── tag-igpsport.xml             # Tag configuration for Mapsforge writer
 ├── tag-igpsport-transform.xml   # Tag transformation rules
 ├── generate_maps_csv.py         # Generate maps.csv from original map files
+├── download_igpsport_maps.py    # List/download official iGPSPORT map ZIPs
 ├── extract_tags_map.py          # Utility to extract tags from .map files
 ├── extract_tags_pbf.py          # Utility to extract tags from PBF files
 ├── download/                    # Downloaded OSM PBF and polygon files
@@ -430,6 +442,18 @@ python generate_maps_csv.py backup/
 # Specify a custom output path
 python generate_maps_csv.py backup/ -o my_maps.csv
 ```
+
+### Official Map Downloader (download_igpsport_maps.py)
+
+Lists or downloads official iGPSPORT map ZIPs from the public support API. This is useful when you need the original vendor `.map` files for a country/region before generating `maps.csv`.
+
+```bash
+python download_igpsport_maps.py europe switzerland --list
+python download_igpsport_maps.py europe switzerland --download -o input
+python download_igpsport_maps.py aargau --download -o input/switzerland
+```
+
+By default, it targets the current BSC300/BSC300T/iGS630 map version ID used by the official product map page. If iGPSPORT publishes a new support URL later, pass its `mapVersionId` with `--map-version-id`.
 
 ### Map Tag Extractor (extract_tags_map.py)
 
