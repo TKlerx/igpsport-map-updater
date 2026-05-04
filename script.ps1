@@ -76,6 +76,8 @@ $TAG_CONF_FILE = Join-Path $SCRIPT_DIR "tag-igpsport.xml"
 $TAG_TRANSFORM_FILE = Join-Path $SCRIPT_DIR "tag-igpsport-transform.xml"
 $THREADS = if ($env:MAP_WRITER_THREADS) { [int]$env:MAP_WRITER_THREADS } else { $null }
 $MAP_WRITER_TYPE = if ($env:MAP_WRITER_TYPE) { $env:MAP_WRITER_TYPE } else { "auto" }
+$MAP_ALLOW_HD_FALLBACK = if ($env:MAP_ALLOW_HD_FALLBACK) { $env:MAP_ALLOW_HD_FALLBACK } else { "" }
+$RESUME_MODE = if ($env:MAP_RESUME) { $env:MAP_RESUME } else { "" }
 $TMP_DIR = if ($env:JAVA_TMP_DIR) { $env:JAVA_TMP_DIR } else { (Join-Path $SCRIPT_DIR "tmp") }
 $JAVA_XMS = if ($env:JAVA_XMS) { $env:JAVA_XMS } else { $null }
 $JAVA_XMX = if ($env:JAVA_XMX) { $env:JAVA_XMX } else { $null }
@@ -180,7 +182,8 @@ Write-Host "  Writer Type:  $MAP_WRITER_TYPE"
 Write-Host "  Threads:      $(if ($THREADS) { $THREADS } else { 'auto' })"
 Write-Host "  Java Heap:    $(if ($JAVA_XMS -or $JAVA_XMX) { "-Xms$JAVA_XMS -Xmx$JAVA_XMX" } else { 'auto' })"
 Write-Host "  Java tmpdir:  $TMP_DIR"
-Write-Host "  Fallback:     auto retries with hd if the ram attempt fails"
+Write-Host "  HD Fallback:  $(if ($MAP_ALLOW_HD_FALLBACK) { 'enabled' } else { 'disabled by default' })"
+Write-Host "  Resume:       $(if ($RESUME_MODE) { 'skip existing final maps' } else { 'off' })"
 Write-Host ""
 
 if (-not (Test-Path $TAG_CONF_FILE)) {
@@ -368,6 +371,34 @@ function Convert-ToBase36 {
     return $result
 }
 
+function Convert-FromBase36 {
+    param([string]$value)
+
+    $result = 0
+    foreach ($char in $value.ToUpper().ToCharArray()) {
+        $digit = $BASE36_CHARS.IndexOf($char)
+        if ($digit -lt 0) {
+            throw "Invalid base36 digit: $char"
+        }
+        $result = ($result * 36) + $digit
+    }
+
+    return $result
+}
+
+function Convert-TileXToLon {
+    param([double]$x, [double]$tiles_per_side)
+
+    return ($x / $tiles_per_side) * 360.0 - 180.0
+}
+
+function Convert-TileYToLat {
+    param([double]$y, [double]$tiles_per_side)
+
+    $n = [math]::PI * (1.0 - 2.0 * $y / $tiles_per_side)
+    return [math]::Atan([math]::Sinh($n)) * 180.0 / [math]::PI
+}
+
 function Convert-ToTileX {
     param([double]$lon, [double]$tiles_per_side)
     
@@ -379,6 +410,24 @@ function Convert-ToTileY {
     
     $lat_rad = $lat * [math]::PI / 180.0
     return [math]::Floor(((1.0 - ([math]::Log([math]::Tan($lat_rad) + (1.0 / [math]::Cos($lat_rad))) / [math]::PI)) / 2.0) * $tiles_per_side)
+}
+
+function Get-OriginalTileBbox {
+    param([string]$originalName)
+
+    $geocode = [System.IO.Path]::GetFileNameWithoutExtension($originalName).Substring(12, 12)
+    $minLonX = Convert-FromBase36 $geocode.Substring(0, 3)
+    $maxLatY = Convert-FromBase36 $geocode.Substring(3, 3)
+    $lonSpan = (Convert-FromBase36 $geocode.Substring(6, 3)) + 1
+    $latSpan = (Convert-FromBase36 $geocode.Substring(9, 3)) + 1
+
+    return @{
+        MinLon = Convert-TileXToLon $minLonX $ZOOM
+        MinLat = Convert-TileYToLat ($maxLatY + $latSpan) $ZOOM
+        MaxLon = Convert-TileXToLon ($minLonX + $lonSpan) $ZOOM
+        MaxLat = Convert-TileYToLat $maxLatY $ZOOM
+        Geocode = $geocode
+    }
 }
 
 function Get-GeoName {
@@ -411,6 +460,27 @@ function Get-CombinedPbfDate {
     }
 
     return ($dates | Sort-Object | Select-Object -Last 1)
+}
+
+function Find-ExistingOutputMap {
+    param(
+        [string]$outputDir,
+        [string]$countryCode,
+        [string]$productCode,
+        [string]$dateString,
+        [string]$geocode
+    )
+
+    if ([string]::IsNullOrWhiteSpace($dateString) -or [string]::IsNullOrWhiteSpace($geocode) -or -not (Test-Path $outputDir)) {
+        return $null
+    }
+
+    $expectedPath = Join-Path $outputDir "${countryCode}${productCode}${dateString}${geocode}.map"
+    if (Test-Path $expectedPath) {
+        return $expectedPath
+    }
+
+    return $null
 }
 
 function Get-PhysicalMemoryStatus {
@@ -477,9 +547,9 @@ function Get-AutoMapWriterConfig {
     elseif ($pbfSizeBytes -le 700MB) {
         $preferred = @{
             WriterType = "ram"
-            Threads = 2
+            Threads = 1
             JavaXms = "3g"
-            JavaXmx = "8g"
+            JavaXmx = $maxAutoHeapString
         }
     }
     elseif ($pbfSizeBytes -le 1GB) {
@@ -502,13 +572,13 @@ function Get-AutoMapWriterConfig {
 
     if ($maxAutoHeapBytes -lt $minRamHeapBytes) {
         return @{
-            WriterType = "hd"
+            WriterType = "ram"
             Threads = 1
-            JavaXms = "2g"
-            JavaXmx = "8g"
+            JavaXms = $maxAutoHeapString
+            JavaXmx = $maxAutoHeapString
             SizeMb = $sizeMb
             TotalGb = $totalGb
-            Reason = "fallback_to_hd_due_to_total_ram_cap"
+            Reason = "ram_limited_by_total_ram"
         }
     }
 
@@ -548,6 +618,7 @@ function Invoke-OsmosisMapWriter {
         [string]$tagTransformFile,
         [string]$outputFile,
         [string]$tagConfFile,
+        [hashtable]$tileBbox,
         [string]$writerType,
         [int]$threads,
         [string]$javaXms,
@@ -574,6 +645,14 @@ function Invoke-OsmosisMapWriter {
         }
     }
 
+    if ($tileBbox) {
+        $args += "--bounding-box"
+        $args += "left=$($tileBbox.MinLon)"
+        $args += "right=$($tileBbox.MaxLon)"
+        $args += "bottom=$($tileBbox.MinLat)"
+        $args += "top=$($tileBbox.MaxLat)"
+    }
+
     $args += "--mapfile-writer"
     $args += "file=$outputFile"
     $args += "type=$writerType"
@@ -581,9 +660,17 @@ function Invoke-OsmosisMapWriter {
     $args += "threads=$threads"
     $args += "tag-conf-file=$tagConfFile"
 
-    & $osmosisWrapper @args
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $osmosisWrapper @args | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
-    return ($LASTEXITCODE -eq 0 -and (Test-Path $outputFile))
+    return [bool]($exitCode -eq 0 -and (Test-Path $outputFile))
 }
 
 $file_index = 0
@@ -615,10 +702,16 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
 
     # Extract product code from original filename (characters 2-5, 0-indexed)
     $PRODUCT_CODE = $ORIGINAL_NAME.Substring(2, 4)
+    $TILE_BBOX = Get-OriginalTileBbox $ORIGINAL_NAME
 
     # Extract date from PBF file before processing
     Write-Host "Extracting date from PBF file..."
     $date_string = Get-CombinedPbfDate $INPUT_FILES
+    $existingOutput = if ($RESUME_MODE) {
+        Find-ExistingOutputMap -outputDir $OUTPUT_DIR -countryCode $COUNTRY_CODE -productCode $PRODUCT_CODE -dateString $date_string -geocode $TILE_BBOX.Geocode
+    } else {
+        $null
+    }
 
     Write-Host "=========================================="
     Write-Host "Processing [$file_index/$total_files]"
@@ -628,6 +721,8 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
     Write-Host "  Original Name: $ORIGINAL_NAME"
     Write-Host "  Country Code:  $COUNTRY_CODE"
     Write-Host "  Product Code:  $PRODUCT_CODE"
+    Write-Host "  Tile Geocode:  $($TILE_BBOX.Geocode)"
+    Write-Host "  Tile BBox:     minLat=$($TILE_BBOX.MinLat) minLng=$($TILE_BBOX.MinLon) maxLat=$($TILE_BBOX.MaxLat) maxLng=$($TILE_BBOX.MaxLon)"
     Write-Host "  PBF Date:      $date_string"
     Write-Host "  PBF Size:      $($autoConfig.SizeMb) MB"
     Write-Host "  Total RAM:     $($autoConfig.TotalGb) GB"
@@ -636,16 +731,22 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
     Write-Host "  Java Heap:     -Xms$effectiveJavaXms -Xmx$effectiveJavaXmx"
     if ($MAP_WRITER_TYPE -eq "auto") {
         if ($autoConfig.Reason -eq "ram_capped_by_total_ram") {
-            Write-Host "  Auto Decision: ram profile capped to about 2/3 of installed RAM, then retry with hd if needed"
+            Write-Host "  Auto Decision: ram profile capped to about 2/3 of installed RAM"
         }
-        elseif ($autoConfig.Reason -eq "fallback_to_hd_due_to_total_ram_cap") {
-            Write-Host "  Auto Decision: total RAM too small for a useful ram profile, using hd"
+        elseif ($autoConfig.Reason -eq "ram_limited_by_total_ram") {
+            Write-Host "  Auto Decision: total RAM below preferred profile, using capped ram"
         }
         else {
-            Write-Host "  Auto Decision: try ram first and retry with hd if needed"
+            Write-Host "  Auto Decision: ram writer only; set MAP_WRITER_TYPE=hd or MAP_ALLOW_HD_FALLBACK=1 to use hd"
         }
     }
     Write-Host "=========================================="
+
+    if ($existingOutput) {
+        Write-Host "Skipping existing output in resume mode: $(Split-Path $existingOutput -Leaf)"
+        Write-Host ""
+        continue
+    }
 
     $OUTPUT_FILE = Join-Path $OUTPUT_DIR "out_$file_index.map"
 
@@ -658,6 +759,7 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
         -tagTransformFile $TAG_TRANSFORM_FILE `
         -outputFile $OUTPUT_FILE `
         -tagConfFile $TAG_CONF_FILE `
+        -tileBbox $TILE_BBOX `
         -writerType $requestedWriterType `
         -threads $effectiveThreads `
         -javaXms $effectiveJavaXms `
@@ -668,7 +770,7 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
     $finalJavaXms = $effectiveJavaXms
     $finalJavaXmx = $effectiveJavaXmx
 
-    if (-not $runSucceeded -and $MAP_WRITER_TYPE -eq "auto" -and $requestedWriterType -eq "ram") {
+    if (-not $runSucceeded -and $MAP_WRITER_TYPE -eq "auto" -and $requestedWriterType -eq "ram" -and $MAP_ALLOW_HD_FALLBACK) {
         $hdConfig = Get-HdConfig
         $fallbackThreads = if ($THREADS) { $THREADS } else { $hdConfig.Threads }
         $fallbackJavaXms = if ($JAVA_XMS) { $JAVA_XMS } else { $hdConfig.JavaXms }
@@ -681,6 +783,7 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
             -tagTransformFile $TAG_TRANSFORM_FILE `
             -outputFile $OUTPUT_FILE `
             -tagConfFile $TAG_CONF_FILE `
+            -tileBbox $TILE_BBOX `
             -writerType "hd" `
             -threads $fallbackThreads `
             -javaXms $fallbackJavaXms `
@@ -733,7 +836,8 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
         $max_lat = $max_lat_micro / 1000000.0
         $max_lng = $max_lng_micro / 1000000.0
         
-        $geo_name = Get-GeoName $min_lng $max_lng $min_lat $max_lat
+        $actual_geo_name = Get-GeoName $min_lng $max_lng $min_lat $max_lat
+        $geo_name = $TILE_BBOX.Geocode
         
         $new_name = "${COUNTRY_CODE}${PRODUCT_CODE}${date_string}${geo_name}"
         $new_path = Join-Path $OUTPUT_DIR "$new_name.map"
@@ -742,6 +846,9 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
         Write-Host "  Date (from PBF): $date_string"
         Write-Host "  Bounding Box: minLat=$min_lat minLng=$min_lng maxLat=$max_lat maxLng=$max_lng"
         Write-Host "  Geo Code:    $geo_name"
+        if ($actual_geo_name -ne $geo_name) {
+            Write-Host "  Data Geo:    $actual_geo_name"
+        }
         Write-Host "  Generated:   $new_name.map"
         
         $reader.Close()

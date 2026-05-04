@@ -1,18 +1,25 @@
+param(
+    [Parameter(Position = 0)]
+    [string]$MapsDir,
+    [switch]$Resume
+)
+
 $ErrorActionPreference = "Stop"
 
 $SCRIPT_DIR = $PSScriptRoot
 
 # Check for original maps directory argument
-if ($args.Count -eq 0) {
-    Write-Host "Usage: .\run.ps1 <directory_with_original_maps>"
+if ([string]::IsNullOrWhiteSpace($MapsDir)) {
+    Write-Host "Usage: .\run.ps1 <directory_with_original_maps> [-Resume]"
     Write-Host ""
     Write-Host "Example:"
     Write-Host "  .\run.ps1 backup\"
     Write-Host "  .\run.ps1 'C:\Users\me\igpsport-maps\original'"
+    Write-Host "  .\run.ps1 input -Resume"
     exit 1
 }
 
-$MAPS_DIR = $args[0]
+$MAPS_DIR = $MapsDir
 
 if (-not (Test-Path $MAPS_DIR -PathType Container)) {
     Write-Error "Error: '$MAPS_DIR' is not a directory."
@@ -39,5 +46,11 @@ Write-Host "=========================================="
 Write-Host "Step 2: Generating maps"
 Write-Host "=========================================="
 Write-Host ""
+
+if ($Resume) {
+    $env:MAP_RESUME = "1"
+    Write-Host "Resume mode enabled: existing output maps for the same country/product/date will be skipped."
+    Write-Host ""
+}
 
 & (Join-Path $SCRIPT_DIR "script.ps1")

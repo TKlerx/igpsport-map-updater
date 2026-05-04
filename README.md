@@ -111,6 +111,7 @@ The `run` script does everything in one go: it reads your original map filenames
 
 ```powershell
 .\run.ps1 backup\
+.\run.ps1 input -Resume
 ```
 
 #### Unix/Linux/macOS
@@ -118,6 +119,7 @@ The `run` script does everything in one go: it reads your original map filenames
 ```bash
 chmod +x run.sh
 ./run.sh backup/
+./run.sh input --resume
 ```
 
 This takes a while depending on the number and size of regions.
@@ -166,10 +168,22 @@ chmod +x script.sh
 By default, the generator now uses an adaptive Mapsforge configuration:
 - It prefers the in-memory (`ram`) writer to avoid excessive temp-file IO.
 - It caps Java heap to about two thirds of installed RAM.
-- It retries once with the disk-backed (`hd`) writer if the RAM attempt fails.
+- It does not fall back to the disk-backed (`hd`) writer unless explicitly enabled.
 - It sizes RAM heuristics from the total source size for that map row, including multi-region blends.
 
-You can still override this manually with `MAP_WRITER_TYPE`, `MAP_WRITER_THREADS`, `JAVA_XMS`, `JAVA_XMX`, and `JAVA_TMP_DIR`.
+You can still override this manually with `MAP_WRITER_TYPE`, `MAP_WRITER_THREADS`, `JAVA_XMS`, `JAVA_XMX`, and `JAVA_TMP_DIR`. If you want the old slow-but-stubborn HD retry behavior, set `MAP_ALLOW_HD_FALLBACK=1`.
+
+If a run was interrupted and some final maps already exist in `output/`, you can resume:
+
+```powershell
+.\run.ps1 input -Resume
+```
+
+```bash
+./run.sh input --resume
+```
+
+Resume mode skips entries when the exact expected final output already exists with the same country code, product code, source PBF date, and original tile geocode.
 
 ## What the Script Does
 
@@ -179,10 +193,11 @@ You can still override this manually with `MAP_WRITER_TYPE`, `MAP_WRITER_THREADS
 4. **Downloads OSM PBF files** - Raw OpenStreetMap data from Geofabrik
 5. **Downloads Polygon files** - Geographic boundary definitions
 6. **Transforms tags** - Converts unsupported OSM tags to device-compatible equivalents
-7. **Chooses writer settings** - Selects adaptive Mapsforge writer mode, threads, and heap size
-8. **Generates maps** - Creates Mapsforge `.map` files with proper zoom levels
-9. **Retries if needed** - Falls back from RAM mode to HD mode on writer failure
-10. **Renames output** - Calculates GEOCODE and applies IGPSPORT filename convention
+7. **Clips to original tile** - Applies the bounding box encoded in the original iGPSport filename
+8. **Chooses writer settings** - Selects adaptive Mapsforge writer mode, threads, and heap size
+9. **Generates maps** - Creates Mapsforge `.map` files with proper zoom levels
+10. **Stops on RAM failure by default** - HD mode is available only when explicitly requested
+11. **Renames output** - Applies the original tile GEOCODE with the updated source date
 
 ## CSV File Structure
 
@@ -339,20 +354,31 @@ java -version
 ### Out of Memory Errors
 The scripts already choose heap size automatically. If you still run into memory problems, try one of these:
 
-- Force the disk-backed writer: `MAP_WRITER_TYPE=hd`
-- Lower the thread count: `MAP_WRITER_THREADS=1`
-- Set a smaller heap manually with `JAVA_XMS` / `JAVA_XMX`
+- Increase heap manually with `JAVA_XMX`
+- Lower the thread count with `MAP_WRITER_THREADS=1`
+- Force the disk-backed writer with `MAP_WRITER_TYPE=hd` only when you accept much heavier disk IO
 
 Examples:
 
 ```powershell
-$env:MAP_WRITER_TYPE = "hd"
 $env:MAP_WRITER_THREADS = "1"
+$env:JAVA_XMX = "20g"
 .\script.ps1
 ```
 
 ```bash
-MAP_WRITER_TYPE=hd MAP_WRITER_THREADS=1 ./script.sh
+MAP_WRITER_THREADS=1 JAVA_XMX=20g ./script.sh
+```
+
+To opt back into automatic HD retry:
+
+```powershell
+$env:MAP_ALLOW_HD_FALLBACK = "1"
+.\script.ps1
+```
+
+```bash
+MAP_ALLOW_HD_FALLBACK=1 ./script.sh
 ```
 
 ### Download Failures

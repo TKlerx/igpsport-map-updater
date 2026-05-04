@@ -59,6 +59,8 @@ TAG_CONF_FILE="$SCRIPT_DIR/tag-igpsport.xml"
 TAG_TRANSFORM_FILE="$SCRIPT_DIR/tag-igpsport-transform.xml"
 THREADS="${MAP_WRITER_THREADS:-}"
 MAP_WRITER_TYPE="${MAP_WRITER_TYPE:-auto}"
+MAP_ALLOW_HD_FALLBACK="${MAP_ALLOW_HD_FALLBACK:-}"
+RESUME_MODE="${MAP_RESUME:-}"
 TMP_DIR="${JAVA_TMP_DIR:-$SCRIPT_DIR/tmp}"
 JAVA_XMS="${JAVA_XMS:-}"
 JAVA_XMX="${JAVA_XMX:-}"
@@ -167,7 +169,8 @@ else
     echo "  Java Heap:    auto"
 fi
 echo "  Java tmpdir:  $TMP_DIR"
-echo "  Fallback:     auto retries with hd if the ram attempt fails"
+echo "  HD Fallback:  $(if [ -n "$MAP_ALLOW_HD_FALLBACK" ]; then echo "enabled"; else echo "disabled by default"; fi)"
+echo "  Resume:       $(if [ -n "$RESUME_MODE" ]; then echo "skip existing final maps"; else echo "off"; fi)"
 echo ""
 
 if [ ! -f "$TAG_CONF_FILE" ]; then
@@ -333,6 +336,26 @@ extract_combined_pbf_date() {
     echo "$latest_date"
 }
 
+find_existing_output_map() {
+    local output_dir="$1"
+    local country_code="$2"
+    local product_code="$3"
+    local date_string="$4"
+    local geocode="$5"
+
+    if [ -z "$date_string" ] || [ -z "$geocode" ] || [ ! -d "$output_dir" ]; then
+        return 1
+    fi
+
+    local expected_path="$output_dir/${country_code}${product_code}${date_string}${geocode}.map"
+    if [ -f "$expected_path" ]; then
+        echo "$expected_path"
+        return 0
+    fi
+
+    return 1
+}
+
 convert_to_base36() {
     local value=$1
     local length=$2
@@ -348,6 +371,58 @@ convert_to_base36() {
     done
     
     echo "$result"
+}
+
+base36_decode() {
+    local value
+    value=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+    local result=0
+    local i
+    for (( i=0; i<${#value}; i++ )); do
+        local char="${value:$i:1}"
+        local index="${BASE36_CHARS%%$char*}"
+        local digit=${#index}
+        result=$((result * 36 + digit))
+    done
+
+    echo "$result"
+}
+
+tile_x_to_lon() {
+    local x="$1"
+    local tiles_per_side="$2"
+    awk -v x="$x" -v tiles="$tiles_per_side" 'BEGIN { printf("%.10f", (x / tiles) * 360.0 - 180.0) }'
+}
+
+tile_y_to_lat() {
+    local y="$1"
+    local tiles_per_side="$2"
+    awk -v y="$y" -v tiles="$tiles_per_side" 'BEGIN {
+        pi = atan2(0, -1)
+        n = pi * (1.0 - 2.0 * y / tiles)
+        printf("%.10f", atan2((exp(n) - exp(-n)) / 2.0, 1.0) * 180.0 / pi)
+    }'
+}
+
+get_original_tile_bbox() {
+    local original_name="$1"
+    local base_name="${original_name%.map}"
+    local geocode="${base_name:12:12}"
+    local min_lon_x
+    local max_lat_y
+    local lon_span
+    local lat_span
+
+    min_lon_x=$(base36_decode "${geocode:0:3}")
+    max_lat_y=$(base36_decode "${geocode:3:3}")
+    lon_span=$(( $(base36_decode "${geocode:6:3}") + 1 ))
+    lat_span=$(( $(base36_decode "${geocode:9:3}") + 1 ))
+
+    TILE_MIN_LON=$(tile_x_to_lon "$min_lon_x" "$ZOOM")
+    TILE_MIN_LAT=$(tile_y_to_lat "$((max_lat_y + lat_span))" "$ZOOM")
+    TILE_MAX_LON=$(tile_x_to_lon "$((min_lon_x + lon_span))" "$ZOOM")
+    TILE_MAX_LAT=$(tile_y_to_lat "$max_lat_y" "$ZOOM")
+    TILE_GEOCODE="$geocode"
 }
 
 convert_to_tile_x() {
@@ -423,7 +498,7 @@ get_auto_map_writer_config() {
     if [ "$pbf_size_bytes" -le $((350 * 1024 * 1024)) ]; then
         preferred="ram|2|2g|6g"
     elif [ "$pbf_size_bytes" -le $((700 * 1024 * 1024)) ]; then
-        preferred="ram|2|3g|8g"
+        preferred="ram|1|3g|$max_auto_heap_string"
     elif [ "$pbf_size_bytes" -le $((1024 * 1024 * 1024)) ]; then
         preferred="ram|1|6g|$max_auto_heap_string"
     else
@@ -435,7 +510,7 @@ get_auto_map_writer_config() {
     requested_heap_bytes=$(heap_string_to_bytes "$preferred_java_xmx")
 
     if [ "$max_auto_heap_bytes" -lt "$min_ram_heap_bytes" ]; then
-        echo "hd|1|2g|8g|fallback_to_hd_due_to_total_ram_cap"
+        echo "ram|1|$max_auto_heap_string|$max_auto_heap_string|ram_limited_by_total_ram"
         return
     fi
 
@@ -478,6 +553,14 @@ run_osmosis_map_writer() {
             cmd+=(--merge)
         fi
     done
+
+    cmd+=(
+        --bounding-box
+        "left=$TILE_MIN_LON"
+        "right=$TILE_MAX_LON"
+        "bottom=$TILE_MIN_LAT"
+        "top=$TILE_MAX_LAT"
+    )
 
     cmd+=(
         --mapfile-writer "file=$OUTPUT_FILE"
@@ -533,10 +616,15 @@ for i in "${!PBF_FILES[@]}"; do
     
     # Extract product code from original filename (characters 2-5, 0-indexed)
     PRODUCT_CODE="${ORIGINAL_NAME:2:4}"
+    get_original_tile_bbox "$ORIGINAL_NAME"
     
     # Extract date from PBF file before processing
     echo "Extracting date from PBF file..."
     date_string=$(extract_combined_pbf_date "${INPUT_FILES[@]}")
+    existing_output=""
+    if [ -n "$RESUME_MODE" ]; then
+        existing_output=$(find_existing_output_map "$OUTPUT_DIR" "$COUNTRY_CODE" "$PRODUCT_CODE" "$date_string" "$TILE_GEOCODE" || true)
+    fi
     
     echo "=========================================="
     echo "Processing [$file_index/${#PBF_FILES[@]}]"
@@ -546,6 +634,8 @@ for i in "${!PBF_FILES[@]}"; do
     echo "  Original Name: $ORIGINAL_NAME"
     echo "  Country Code:  $COUNTRY_CODE"
     echo "  Product Code:  $PRODUCT_CODE"
+    echo "  Tile Geocode:  $TILE_GEOCODE"
+    echo "  Tile BBox:     minLat=$TILE_MIN_LAT minLng=$TILE_MIN_LON maxLat=$TILE_MAX_LAT maxLng=$TILE_MAX_LON"
     echo "  PBF Date:      $date_string"
     echo "  PBF Size:      ${pbf_size_mb} MB"
     echo "  Total RAM:     ${total_physical_gb} GB"
@@ -554,14 +644,20 @@ for i in "${!PBF_FILES[@]}"; do
     echo "  Java Heap:     -Xms$effective_java_xms -Xmx$effective_java_xmx"
     if [ "$MAP_WRITER_TYPE" = "auto" ]; then
         if [ "$auto_reason" = "ram_capped_by_total_ram" ]; then
-            echo "  Auto Decision: ram profile capped to about 2/3 of installed RAM, then retry with hd if needed"
-        elif [ "$auto_reason" = "fallback_to_hd_due_to_total_ram_cap" ]; then
-            echo "  Auto Decision: total RAM too small for a useful ram profile, using hd"
+            echo "  Auto Decision: ram profile capped to about 2/3 of installed RAM"
+        elif [ "$auto_reason" = "ram_limited_by_total_ram" ]; then
+            echo "  Auto Decision: total RAM below preferred profile, using capped ram"
         else
-            echo "  Auto Decision: try ram first and retry with hd if needed"
+            echo "  Auto Decision: ram writer only; set MAP_WRITER_TYPE=hd or MAP_ALLOW_HD_FALLBACK=1 to use hd"
         fi
     fi
     echo "=========================================="
+
+    if [ -n "$existing_output" ]; then
+        echo "Skipping existing output in resume mode: $(basename "$existing_output")"
+        echo ""
+        continue
+    fi
     
     OUTPUT_FILE="$OUTPUT_DIR/out_$file_index.map"
     
@@ -573,7 +669,7 @@ for i in "${!PBF_FILES[@]}"; do
     final_java_xms="$effective_java_xms"
     final_java_xmx="$effective_java_xmx"
 
-    if [ $run_status -ne 0 ] && [ "$MAP_WRITER_TYPE" = "auto" ] && [ "$requested_writer_type" = "ram" ]; then
+    if [ $run_status -ne 0 ] && [ "$MAP_WRITER_TYPE" = "auto" ] && [ "$requested_writer_type" = "ram" ] && [ -n "$MAP_ALLOW_HD_FALLBACK" ]; then
         IFS='|' read -r hd_writer_type hd_threads hd_java_xms hd_java_xmx <<< "$(get_hd_config)"
         fallback_threads="${THREADS:-$hd_threads}"
         fallback_java_xms="${JAVA_XMS:-$hd_java_xms}"
@@ -648,7 +744,8 @@ for i in "${!PBF_FILES[@]}"; do
         max_lat=$(echo "scale=6; $max_lat_micro / 1000000.0" | bc)
         max_lng=$(echo "scale=6; $max_lng_micro / 1000000.0" | bc)
         
-        geo_name=$(get_geo_name "$min_lng" "$max_lng" "$min_lat" "$max_lat")
+        actual_geo_name=$(get_geo_name "$min_lng" "$max_lng" "$min_lat" "$max_lat")
+        geo_name="$TILE_GEOCODE"
         
         new_name="${COUNTRY_CODE}${PRODUCT_CODE}${date_string}${geo_name}"
         new_path="$OUTPUT_DIR/$new_name.map"
@@ -657,6 +754,9 @@ for i in "${!PBF_FILES[@]}"; do
         echo "  Date (from PBF): $date_string"
         echo "  Bounding Box: minLat=$min_lat minLng=$min_lng maxLat=$max_lat maxLng=$max_lng"
         echo "  Geo Code:    $geo_name"
+        if [ "$actual_geo_name" != "$geo_name" ]; then
+            echo "  Data Geo:    $actual_geo_name"
+        fi
         echo "  Generated:   $new_name.map"
         
         if [ -f "$new_path" ]; then
