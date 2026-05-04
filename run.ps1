@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $SCRIPT_DIR = $PSScriptRoot
+$PYTHON = if ([string]::IsNullOrWhiteSpace($env:PYTHON)) { "python" } else { $env:PYTHON }
 
 # Check for original maps directory argument
 if ([string]::IsNullOrWhiteSpace($MapsDir)) {
@@ -33,7 +34,7 @@ Write-Host "Step 1: Generating maps.csv"
 Write-Host "=========================================="
 Write-Host ""
 
-python (Join-Path $SCRIPT_DIR "generate_maps_csv.py") $MAPS_DIR -o (Join-Path $SCRIPT_DIR "maps.csv")
+& $PYTHON (Join-Path $SCRIPT_DIR "generate_maps_csv.py") $MAPS_DIR -o (Join-Path $SCRIPT_DIR "maps.csv")
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to generate maps.csv"

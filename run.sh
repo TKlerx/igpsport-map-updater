@@ -4,6 +4,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESUME_MODE=0
+PYTHON="${PYTHON:-python3}"
 
 # Check for original maps directory argument
 if [ $# -eq 0 ]; then
@@ -40,7 +41,7 @@ echo "Step 1: Generating maps.csv"
 echo "=========================================="
 echo ""
 
-python3 "$SCRIPT_DIR/generate_maps_csv.py" "$MAPS_DIR" -o "$SCRIPT_DIR/maps.csv"
+"$PYTHON" "$SCRIPT_DIR/generate_maps_csv.py" "$MAPS_DIR" -o "$SCRIPT_DIR/maps.csv"
 
 # Step 2: Generate maps
 echo ""

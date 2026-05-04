@@ -4,6 +4,7 @@ output
 tmp
 backup
 input
+packages
 maps.csv
 __pycache__/
 .pytest_cache/

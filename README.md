@@ -13,6 +13,12 @@ A tool to generate custom map files for IGPSPORT cycling computers from OpenStre
 
 Official support/download page: https://www.igpsport.com/en/support/product
 
+Unofficial generated maps may be shared separately here:
+https://drive.google.com/drive/folders/1NY_q-Hvnez6VN00m43LLvkheAtAw5vA2
+
+These shared maps are community-generated artifacts, not official iGPSPORT downloads. See [ATTRIBUTION.md](ATTRIBUTION.md) for OpenStreetMap attribution and sharing notes.
+Use [MAP_PACKAGE_README.txt](MAP_PACKAGE_README.txt) as the README file for shared map folders or ZIP packages.
+
 ## Requirements
 
 - **Java 17** or higher
@@ -38,6 +44,8 @@ Official support/download page: https://www.igpsport.com/en/support/product
 uv sync                # installs dev dependencies (pytest)
 uv sync --extra pbf    # also installs pyosmium (needed for extract_tags_pbf.py)
 ```
+
+Use `uv run python ...` for Python utilities when possible. This keeps the repo on the configured Python version and avoids accidentally using a different system Python.
 
 ## Important Notes
 
@@ -106,9 +114,9 @@ Connect your iGPSport device via USB and copy all `.map` files from the device t
 If you do not already have the original files, you can download official map ZIPs from the iGPSPORT support API:
 
 ```bash
-python download_igpsport_maps.py europe switzerland --list
-python download_igpsport_maps.py europe switzerland --download -o input
-python download_igpsport_maps.py aargau --download -o input
+uv run python download_igpsport_maps.py switzerland --list
+uv run python download_igpsport_maps.py switzerland --download -o input
+uv run python download_igpsport_maps.py aargau --download -o input
 ```
 
 The downloader uses the same public map tree as the iGPSPORT support page, saves the ZIPs, and extracts the contained `.map` files. Those extracted maps can then be used as the input directory for `run.ps1` / `run.sh`.
@@ -144,6 +152,36 @@ If you prefer to run the steps separately (e.g., to edit `maps.csv` before gener
 2. Copy the new `.map` files from `output/` to your device
 3. Safely eject and restart the device
 
+### 4. Package maps for sharing
+
+To create a shareable ZIP from generated maps, package them with the original input directory used for generation:
+
+```powershell
+uv run python package_maps.py input
+```
+
+```bash
+uv run python package_maps.py input
+```
+
+The package is written to `packages/` and includes matching generated `.map` files from `output/`, `README.txt` from [MAP_PACKAGE_README.txt](MAP_PACKAGE_README.txt), and `MANIFEST.txt` with the generator commit, included maps, and original input filenames.
+
+The default ZIP name is derived from the input country, for example `IGPSport300-800-Switzerland.zip`. Use `--label` or `--name` to override it.
+
+### One-command country package
+
+If you want the downloader, generator, and packager in one command:
+
+```powershell
+uv run python build_map_package.py switzerland
+```
+
+```bash
+uv run python build_map_package.py switzerland
+```
+
+This downloads the official original maps into `tmp/igpsport-official-switzerland/input`, runs the generator with resume mode, and creates `packages/IGPSport300-800-Switzerland.zip`. Use `--dry-run` to print the commands without downloading or generating maps.
+
 ## Running Step by Step
 
 You can also run each step individually, which is useful if you want to review or manually edit `maps.csv` before generating maps.
@@ -151,7 +189,7 @@ You can also run each step individually, which is useful if you want to review o
 ### Step 1: Generate maps.csv
 
 ```bash
-python generate_maps_csv.py backup/
+uv run python generate_maps_csv.py backup/
 ```
 
 The script reads the iGPSport filenames, figures out which geographic regions they cover, and finds the matching download URLs from [Geofabrik](https://download.geofabrik.de/). Review the output to verify the matched regions are correct.
@@ -253,6 +291,8 @@ igpsport-map-updater/
 ├── tag-igpsport-transform.xml   # Tag transformation rules
 ├── generate_maps_csv.py         # Generate maps.csv from original map files
 ├── download_igpsport_maps.py    # List/download official iGPSPORT map ZIPs
+├── build_map_package.py         # End-to-end download/generate/package helper
+├── package_maps.py              # Package generated maps with README/manifest
 ├── extract_tags_map.py          # Utility to extract tags from .map files
 ├── extract_tags_pbf.py          # Utility to extract tags from PBF files
 ├── download/                    # Downloaded OSM PBF and polygon files
@@ -437,10 +477,10 @@ iGPSport map filenames encode the country, region, and geographic bounding box i
 
 ```bash
 # Generate maps.csv from your backup directory
-python generate_maps_csv.py backup/
+uv run python generate_maps_csv.py backup/
 
 # Specify a custom output path
-python generate_maps_csv.py backup/ -o my_maps.csv
+uv run python generate_maps_csv.py backup/ -o my_maps.csv
 ```
 
 ### Official Map Downloader (download_igpsport_maps.py)
@@ -448,21 +488,45 @@ python generate_maps_csv.py backup/ -o my_maps.csv
 Lists or downloads official iGPSPORT map ZIPs from the public support API. This is useful when you need the original vendor `.map` files for a country/region before generating `maps.csv`.
 
 ```bash
-python download_igpsport_maps.py europe switzerland --list
-python download_igpsport_maps.py europe switzerland --download -o input
-python download_igpsport_maps.py aargau --download -o input/switzerland
+uv run python download_igpsport_maps.py switzerland --list
+uv run python download_igpsport_maps.py switzerland --download -o input
+uv run python download_igpsport_maps.py aargau --download -o input/switzerland
 ```
 
-By default, it targets the current BSC300/BSC300T/iGS630 map version ID used by the official product map page. If iGPSPORT publishes a new support URL later, pass its `mapVersionId` with `--map-version-id`.
+You do not need to include the full hierarchy when a region name is unique: `switzerland` downloads all Swiss canton maps. By default, it targets the current BSC300/BSC300T/iGS630 map version ID used by the official product map page. If iGPSPORT publishes a new support URL later, pass its `mapVersionId` with `--map-version-id`.
+
+### Map Packager (package_maps.py)
+
+Packages generated maps for sharing. It matches generated output maps back to the original input maps by country code, product code, and geocode, so the generated OSM date may differ from the original vendor date.
+
+```bash
+uv run python package_maps.py input
+uv run python package_maps.py input --label switzerland
+uv run python package_maps.py input --name my-map-pack.zip
+```
+
+The ZIP contains `README.txt`, `MANIFEST.txt`, and the matching generated `.map` files. For Switzerland, the default package name is `IGPSport300-800-Switzerland.zip`.
+
+### End-to-End Packager (build_map_package.py)
+
+Runs the official map downloader, full map generator, and ZIP packager as one workflow.
+
+```bash
+uv run python build_map_package.py switzerland
+uv run python build_map_package.py switzerland --dry-run
+uv run python build_map_package.py switzerland --name IGPSport300-800-Switzerland.zip
+```
+
+Downloads are stored under `tmp/igpsport-official-<region>/input`, generated maps are written to `output/`, and the final ZIP is written to `packages/`.
 
 ### Map Tag Extractor (extract_tags_map.py)
 
 Inspects the generated `.map` files to show which OSM tags they contain. Useful for verifying that the tag configuration and transformations work as expected, or for comparing your generated maps against the originals.
 
 ```bash
-python extract_tags_map.py output/map.map            # single file
-python extract_tags_map.py backup/                    # all files in folder
-python extract_tags_map.py backup/ tags_output/       # with output folder
+uv run python extract_tags_map.py output/map.map            # single file
+uv run python extract_tags_map.py backup/                    # all files in folder
+uv run python extract_tags_map.py backup/ tags_output/       # with output folder
 ```
 
 ### PBF Tag Extractor (extract_tags_pbf.py)
@@ -472,9 +536,9 @@ Analyzes the raw OpenStreetMap source data (`.osm.pbf` files) **before** process
 **Requires pyosmium** — install with `uv sync --extra pbf`.
 
 ```bash
-python extract_tags_pbf.py download/hessen-latest.osm.pbf              # display in terminal
-python extract_tags_pbf.py download/hessen-latest.osm.pbf -o tags.json -f json  # export to JSON
-python extract_tags_pbf.py download/ -o output/ -f csv -m 10           # folder, CSV, min 10 occurrences
+uv run python extract_tags_pbf.py download/hessen-latest.osm.pbf              # display in terminal
+uv run python extract_tags_pbf.py download/hessen-latest.osm.pbf -o tags.json -f json  # export to JSON
+uv run python extract_tags_pbf.py download/ -o output/ -f csv -m 10           # folder, CSV, min 10 occurrences
 ```
 
 Options: `-o` output path, `-f` format (text/json/csv), `-m` min occurrence count, `-d` max display count.
@@ -487,6 +551,8 @@ This project is licensed under the **Apache License 2.0** - see the [LICENSE](LI
 - **Osmosis**: LGPL ([GitHub](https://github.com/openstreetmap/osmosis))
 - **Mapsforge**: LGPL ([GitHub](https://github.com/mapsforge/mapsforge))
 - **OpenStreetMap Data**: ODbL ([License](https://www.openstreetmap.org/copyright))
+
+Generated maps are derived from OpenStreetMap data. If you distribute them, include the attribution and sharing notes described in [ATTRIBUTION.md](ATTRIBUTION.md).
 
 ## References
 

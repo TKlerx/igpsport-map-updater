@@ -5,6 +5,11 @@ This changelog documents notable changes made in this fork after diverging from 
 ## Unreleased
 
 ### Added
+- Added `ATTRIBUTION.md` with OpenStreetMap attribution text and sharing guidance for generated maps.
+- Added an optional Google Drive link for separately shared unofficial generated maps.
+- Added `MAP_PACKAGE_README.txt` for shared map folders and ZIP packages.
+- Added `build_map_package.py` as a one-command download, generate, and package workflow.
+- Added `package_maps.py` to create shareable ZIPs with generated maps, README, and manifest.
 - Added `generate_maps_csv.py` to derive `maps.csv` entries from original iGPSport `.map` filenames.
 - Added `download_igpsport_maps.py` to list/download official iGPSPORT map ZIPs from the public support API.
 - Added `run.ps1` and `run.sh` for the full end-to-end workflow: generate `maps.csv`, then build new map files.

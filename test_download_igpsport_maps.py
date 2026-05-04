@@ -1,6 +1,12 @@
 """Tests for download_igpsport_maps.py"""
 
-from download_igpsport_maps import find_downloads, format_size, normalize, path_matches
+from download_igpsport_maps import (
+    common_path_prefix,
+    find_downloads,
+    format_size,
+    normalize,
+    path_matches,
+)
 
 
 TREE = [
@@ -60,6 +66,12 @@ def test_find_downloads_can_match_country():
         "Aargau",
         "Canton Of Graubünden",
     ]
+
+
+def test_common_path_prefix_for_country_downloads():
+    downloads = find_downloads(TREE, ["switzerland"])
+
+    assert common_path_prefix(downloads) == ["europe", "Switzerland"]
 
 
 def test_find_downloads_can_match_single_region_with_accentless_input():

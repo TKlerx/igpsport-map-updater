@@ -3,8 +3,8 @@
 List or download official iGPSPORT map files from the public support API.
 
 Examples:
-    python download_igpsport_maps.py europe switzerland --list
-    python download_igpsport_maps.py europe switzerland --download -o input
+    python download_igpsport_maps.py switzerland --list
+    python download_igpsport_maps.py switzerland --download -o input
     python download_igpsport_maps.py aargau --download -o input/switzerland
 """
 
@@ -192,6 +192,19 @@ def print_downloads(downloads):
         print(f"  URL:     {node.get('mapPathUrl') or node.get('fileUrl')}")
 
 
+def common_path_prefix(downloads):
+    """Return the common path prefix for a set of downloads."""
+    if not downloads:
+        return []
+
+    prefix = list(downloads[0][0])
+    for path, _node in downloads[1:]:
+        while prefix and path[:len(prefix)] != prefix:
+            prefix.pop()
+
+    return prefix
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="List or download official iGPSPORT map ZIPs from the support API."
@@ -199,7 +212,7 @@ def main():
     parser.add_argument(
         "path",
         nargs="*",
-        help="Region path terms to match, e.g. europe switzerland or aargau",
+        help="Region terms to match, e.g. switzerland or aargau",
     )
     parser.add_argument(
         "--download",
@@ -251,6 +264,9 @@ def main():
 
     print(f"Found {len(downloads)} downloadable map(s).")
     print_downloads(downloads)
+    prefix = common_path_prefix(downloads)
+    if prefix:
+        print(f"\nMatched area: {' > '.join(prefix)}")
 
     if not args.download:
         return
@@ -273,6 +289,10 @@ def main():
             if not args.keep_zip:
                 downloaded.unlink()
                 print(f"  Removed ZIP: {downloaded}")
+
+    print("\nNext steps:")
+    print(f"  .\\run.ps1 {output_dir} -Resume")
+    print(f"  python package_maps.py {output_dir}")
 
 
 if __name__ == "__main__":
