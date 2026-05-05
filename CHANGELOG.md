@@ -10,6 +10,7 @@ This changelog documents notable changes made in this fork after diverging from 
 - Added `MAP_PACKAGE_README.txt` for shared map folders and ZIP packages.
 - Added `build_map_package.py` as a one-command download, generate, and package workflow.
 - Added `package_maps.py` to create shareable ZIPs with generated maps, README, and manifest.
+- Added official map discovery options to list country-level regions or search map names.
 - Added `generate_maps_csv.py` to derive `maps.csv` entries from original iGPSport `.map` filenames.
 - Added `download_igpsport_maps.py` to list/download official iGPSPORT map ZIPs from the public support API.
 - Added `run.ps1` and `run.sh` for the full end-to-end workflow: generate `maps.csv`, then build new map files.
@@ -19,6 +20,8 @@ This changelog documents notable changes made in this fork after diverging from 
 - Added option 3 / multi-region source blending for tiles that span several same-country Geofabrik subregions.
 
 ### Changed
+- Made the end-to-end package workflow resumable for already downloaded official input maps.
+- Added `--clean-work` to the end-to-end package workflow to remove downloaded official input maps after successful packaging.
 - Updated `script.ps1` and `script.sh` to make Mapsforge writer tuning configurable.
 - Changed the default writer behavior from fixed `hd` mode to adaptive `auto` mode.
 - Added RAM-first Mapsforge execution with automatic retry in `hd` mode if the RAM attempt fails.

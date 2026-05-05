@@ -182,6 +182,14 @@ uv run python build_map_package.py switzerland
 
 This downloads the official original maps into `tmp/igpsport-official-switzerland/input`, runs the generator with resume mode, and creates `packages/IGPSport300-800-Switzerland.zip`. Use `--dry-run` to print the commands without downloading or generating maps.
 
+The workflow is resumable: existing official input maps in `tmp/igpsport-official-<region>/input` are skipped, and existing generated output maps are skipped by the generator's resume mode.
+
+By default, the work folder is kept so reruns can resume. Use `--clean-work` to delete that country work folder after a successful package build:
+
+```powershell
+uv run python build_map_package.py switzerland --clean-work
+```
+
 ## Running Step by Step
 
 You can also run each step individually, which is useful if you want to review or manually edit `maps.csv` before generating maps.
@@ -489,11 +497,14 @@ Lists or downloads official iGPSPORT map ZIPs from the public support API. This 
 
 ```bash
 uv run python download_igpsport_maps.py switzerland --list
+uv run python download_igpsport_maps.py --countries
+uv run python download_igpsport_maps.py --search swiss
 uv run python download_igpsport_maps.py switzerland --download -o input
+uv run python download_igpsport_maps.py switzerland --download --resume -o input
 uv run python download_igpsport_maps.py aargau --download -o input/switzerland
 ```
 
-You do not need to include the full hierarchy when a region name is unique: `switzerland` downloads all Swiss canton maps. By default, it targets the current BSC300/BSC300T/iGS630 map version ID used by the official product map page. If iGPSPORT publishes a new support URL later, pass its `mapVersionId` with `--map-version-id`.
+You do not need to include the full hierarchy when a region name is unique: `switzerland` downloads all Swiss canton maps. Use `--countries` to list available country-level regions, or `--search <term>` to search region/map names. Use `--resume` to skip official ZIP downloads when a matching extracted `.map` already exists. By default, it targets the current BSC300/BSC300T/iGS630 map version ID used by the official product map page. If iGPSPORT publishes a new support URL later, pass its `mapVersionId` with `--map-version-id`.
 
 ### Map Packager (package_maps.py)
 
@@ -514,10 +525,13 @@ Runs the official map downloader, full map generator, and ZIP packager as one wo
 ```bash
 uv run python build_map_package.py switzerland
 uv run python build_map_package.py switzerland --dry-run
+uv run python build_map_package.py switzerland --clean-work
 uv run python build_map_package.py switzerland --name IGPSport300-800-Switzerland.zip
 ```
 
-Downloads are stored under `tmp/igpsport-official-<region>/input`, generated maps are written to `output/`, and the final ZIP is written to `packages/`.
+Downloads are stored under `tmp/igpsport-official-<region>/input`, generated maps are written to `output/`, and the final ZIP is written to `packages/`. Rerunning the same command resumes both the official input download step and the generated map step. Use `--clean-work` when you prefer to remove the downloaded official input maps after a successful package build.
+
+If you do not know the exact region name, run `uv run python download_igpsport_maps.py --countries` or `uv run python download_igpsport_maps.py --search <term>` first.
 
 ### Map Tag Extractor (extract_tags_map.py)
 

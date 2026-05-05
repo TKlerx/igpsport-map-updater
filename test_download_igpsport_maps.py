@@ -2,10 +2,15 @@
 
 from download_igpsport_maps import (
     common_path_prefix,
+    country_regions,
+    existing_extracted_maps,
     find_downloads,
+    find_regions,
     format_size,
     normalize,
+    official_map_prefix,
     path_matches,
+    term_matches_text,
 )
 
 
@@ -74,6 +79,27 @@ def test_common_path_prefix_for_country_downloads():
     assert common_path_prefix(downloads) == ["europe", "Switzerland"]
 
 
+def test_country_regions_lists_country_level_nodes():
+    countries = country_regions(TREE)
+
+    assert [path for path, _node in countries] == [
+        ["europe", "Germany"],
+        ["europe", "Switzerland"],
+    ]
+
+
+def test_find_regions_can_search_parent_region():
+    regions = find_regions(TREE, ["swiss"])
+
+    assert [path for path, _node in regions] == [["europe", "Switzerland"]]
+
+
+def test_term_matches_text_accepts_prefixes():
+    assert term_matches_text("swiss", "Switzerland")
+    assert term_matches_text("graubund", "Canton Of Graubünden")
+    assert not term_matches_text("xyz", "Switzerland")
+
+
 def test_find_downloads_can_match_single_region_with_accentless_input():
     downloads = find_downloads(TREE, ["graubunden"])
 
@@ -87,3 +113,17 @@ def test_format_size():
     assert format_size(512) == "512 B"
     assert format_size(2048) == "2.0 KB"
     assert format_size(2 * 1024 * 1024) == "2.0 MB"
+
+
+def test_official_map_prefix_from_zip_url():
+    assert official_map_prefix("https://example.test/Mapinfo/V1/CH0100.zip") == "CH0100"
+    assert official_map_prefix("https://example.test/no-prefix.zip") is None
+
+
+def test_existing_extracted_maps(tmp_path):
+    (tmp_path / "CH01002603203YR1DZ005004.map").write_bytes(b"map")
+    (tmp_path / "CH02002603203YR1DZ005004.map").write_bytes(b"map")
+
+    matches = existing_extracted_maps(tmp_path, "https://example.test/CH0100.zip")
+
+    assert [path.name for path in matches] == ["CH01002603203YR1DZ005004.map"]

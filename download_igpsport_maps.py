@@ -4,7 +4,10 @@ List or download official iGPSPORT map files from the public support API.
 
 Examples:
     python download_igpsport_maps.py switzerland --list
+    python download_igpsport_maps.py --countries
+    python download_igpsport_maps.py --search swiss
     python download_igpsport_maps.py switzerland --download -o input
+    python download_igpsport_maps.py switzerland --download --resume -o input
     python download_igpsport_maps.py aargau --download -o input/switzerland
 """
 
@@ -22,6 +25,12 @@ from pathlib import Path
 DEFAULT_API_BASE_URL = "https://prod.en.igpsport.com/service"
 DEFAULT_MAP_VERSION_ID = "1f504832-9c67-11ef-a0af-000c29d603cc"
 DEFAULT_LANGUAGE = "en"
+SEARCH_ALIASES = {
+    "swiss": "switzerland",
+    "czechia": "czech",
+    "uk": "united kingdom",
+    "usa": "united states",
+}
 
 
 def normalize(value):
@@ -78,6 +87,15 @@ def iter_downloads(nodes):
             yield path, node
 
 
+def iter_parent_regions(nodes):
+    """Yield non-downloadable region nodes, usually continent/country groups."""
+    for path, node in iter_nodes(nodes):
+        url = node.get("mapPathUrl") or node.get("fileUrl")
+        children = node.get("subList") or []
+        if children and not url:
+            yield path, node
+
+
 def path_matches(path, wanted):
     """Return true when wanted terms appear in path order."""
     if not wanted:
@@ -102,12 +120,41 @@ def path_matches(path, wanted):
     return True
 
 
+def term_matches_text(term, text):
+    """Forgiving search match for region names."""
+    normalized_term = normalize(term)
+    normalized_text = normalize(text)
+    if not normalized_term:
+        return True
+
+    terms = [normalized_term]
+    if normalized_term in SEARCH_ALIASES:
+        terms.append(normalize(SEARCH_ALIASES[normalized_term]))
+
+    for candidate in terms:
+        if candidate in normalized_text:
+            return True
+        if any(token.startswith(candidate) for token in normalized_text.split()):
+            return True
+
+    return False
+
+
 def find_downloads(nodes, wanted):
     """Find downloadable map entries whose path matches the requested terms."""
     return [
         (path, node)
         for path, node in iter_downloads(nodes)
         if path_matches(path, wanted)
+    ]
+
+
+def find_regions(nodes, wanted):
+    """Find parent region entries whose path or name matches requested terms."""
+    return [
+        (path, node)
+        for path, node in iter_parent_regions(nodes)
+        if path_matches(path, wanted) or any(term_matches_text(term, path[-1]) for term in wanted)
     ]
 
 
@@ -171,6 +218,25 @@ def extract_map_files(zip_path, output_dir):
     return extracted
 
 
+def official_map_prefix(url):
+    """Return the country/product prefix from official ZIP URLs like CH0100.zip."""
+    name = Path(urllib.parse.urlparse(url).path).name
+    match = re.match(r"^([A-Z]{2}\d{4})", name, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    return match.group(1).upper()
+
+
+def existing_extracted_maps(output_dir, url):
+    """Find existing extracted maps that likely came from an official ZIP URL."""
+    prefix = official_map_prefix(url)
+    if not prefix:
+        return []
+
+    return sorted(Path(output_dir).glob(f"{prefix}*.map"))
+
+
 def format_size(size):
     if not size:
         return "unknown size"
@@ -190,6 +256,25 @@ def print_downloads(downloads):
         print(f"  Version: {node.get('mapVersion') or node.get('ver') or 'unknown'}")
         print(f"  Size:    {format_size(node.get('mapSize') or node.get('size'))}")
         print(f"  URL:     {node.get('mapPathUrl') or node.get('fileUrl')}")
+
+
+def print_regions(regions):
+    for path, node in regions:
+        children = node.get("subList") or []
+        downloadable_count = sum(1 for child in children if child.get("mapPathUrl") or child.get("fileUrl"))
+        child_count = len(children)
+        suffix = f" ({downloadable_count or child_count} item(s))" if child_count else ""
+        print(f"{' > '.join(path)}{suffix}")
+
+
+def country_regions(nodes):
+    """Return country-level regions from the map tree."""
+    countries = []
+    for path, node in iter_parent_regions(nodes):
+        if len(path) == 2:
+            countries.append((path, node))
+
+    return sorted(countries, key=lambda item: normalize(" > ".join(item[0])))
 
 
 def common_path_prefix(downloads):
@@ -215,6 +300,16 @@ def main():
         help="Region terms to match, e.g. switzerland or aargau",
     )
     parser.add_argument(
+        "--countries",
+        action="store_true",
+        help="List available country-level regions and exit",
+    )
+    parser.add_argument(
+        "--search",
+        metavar="TERM",
+        help="Search available region and map names without downloading",
+    )
+    parser.add_argument(
         "--download",
         action="store_true",
         help="Download matching ZIPs and extract contained .map files",
@@ -234,6 +329,11 @@ def main():
         "--keep-zip",
         action="store_true",
         help="Keep downloaded ZIP archives after extraction",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip official ZIP downloads when a matching extracted .map already exists",
     )
     parser.add_argument(
         "--map-version-id",
@@ -256,6 +356,31 @@ def main():
         args.list = True
 
     tree = fetch_map_tree(args.map_version_id, args.language, args.api_base_url)
+
+    if args.countries:
+        print_regions(country_regions(tree))
+        return
+
+    if args.search:
+        wanted = [args.search]
+        regions = find_regions(tree, wanted)
+        downloads = find_downloads(tree, wanted)
+        if not regions and not downloads:
+            print("No matching regions or downloadable maps found.", file=sys.stderr)
+            sys.exit(1)
+
+        if regions:
+            print("Regions:")
+            print_regions(regions)
+
+        if downloads:
+            if regions:
+                print("")
+            print("Downloadable maps:")
+            print_downloads(downloads)
+
+        return
+
     downloads = find_downloads(tree, args.path)
 
     if not downloads:
@@ -277,6 +402,13 @@ def main():
     for path, node in downloads:
         url = node.get("mapPathUrl") or node.get("fileUrl")
         label = " > ".join(path)
+
+        if args.resume:
+            existing = existing_extracted_maps(output_dir, url)
+            if existing:
+                print(f"\nSkipping existing {label}: {existing[0].name}")
+                continue
+
         print(f"\nDownloading {label}...")
         downloaded = download_file(url, output_dir)
         print(f"  Saved: {downloaded}")

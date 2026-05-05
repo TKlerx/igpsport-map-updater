@@ -11,6 +11,7 @@ Example:
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -59,6 +60,7 @@ def workflow_commands(args, input_dir):
             "download_igpsport_maps.py",
             *args.region,
             "--download",
+            "--resume",
             "-o",
             str(input_dir),
         ],
@@ -145,10 +147,16 @@ def main():
         action="store_true",
         help="Print the commands without running them",
     )
+    parser.add_argument(
+        "--clean-work",
+        action="store_true",
+        help="Delete this workflow's downloaded input work folder after a successful package build",
+    )
     args = parser.parse_args()
 
     slug = safe_slug(args.region)
-    input_dir = Path(args.work_root) / f"igpsport-official-{slug}" / "input"
+    work_dir = Path(args.work_root) / f"igpsport-official-{slug}"
+    input_dir = work_dir / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Region: {' '.join(args.region)}")
@@ -161,6 +169,9 @@ def main():
 
     if args.dry_run:
         print("\nDry run complete. No maps were downloaded or generated.")
+    elif args.clean_work:
+        shutil.rmtree(work_dir)
+        print(f"\nRemoved work folder: {work_dir}")
 
 
 if __name__ == "__main__":

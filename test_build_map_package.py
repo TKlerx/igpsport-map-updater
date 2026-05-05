@@ -3,7 +3,7 @@
 from argparse import Namespace
 from pathlib import Path
 
-from build_map_package import display_label, safe_slug, workflow_commands
+from build_map_package import display_label, main, safe_slug, workflow_commands
 
 
 def test_safe_slug():
@@ -35,6 +35,7 @@ def test_workflow_commands_include_download_generate_and_package(monkeypatch):
         "switzerland",
         "--download",
     ]
+    assert "--resume" in commands[0]
     assert Path(commands[1][-2]) == Path("tmp/igpsport-official-switzerland/input")
     assert commands[1][-1] == "-Resume"
     assert commands[2][-2:] == ["--label", "Switzerland"]
@@ -56,3 +57,27 @@ def test_workflow_commands_can_override_package_name():
     assert commands[2][-2:] == ["--name", "IGPSport300-800-Switzerland.zip"]
     assert "--output-dir" in commands[2]
     assert "custom-output" in commands[2]
+
+
+def test_clean_work_removes_region_work_folder(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run_command(command, dry_run=False):
+        calls.append((command, dry_run))
+
+    monkeypatch.setattr("build_map_package.run_command", fake_run_command)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "build_map_package.py",
+            "switzerland",
+            "--work-root",
+            str(tmp_path),
+            "--clean-work",
+        ],
+    )
+
+    main()
+
+    assert len(calls) == 3
+    assert not (tmp_path / "igpsport-official-switzerland").exists()
