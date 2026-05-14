@@ -658,9 +658,39 @@ for i in "${!PBF_FILES[@]}"; do
         echo ""
         continue
     fi
-    
+
+    if command -v osmium >/dev/null 2>&1; then
+        echo "Pre-clipping source PBF(s) to tile bbox with osmium..."
+        EXTRACTED_INPUT_FILES=()
+        for source_index in "${!INPUT_FILES[@]}"; do
+            source_pbf="${INPUT_FILES[$source_index]}"
+            source_basename=$(basename "$source_pbf" .osm.pbf)
+            extracted_pbf="$DOWNLOAD_DIR/${source_basename}-${TILE_GEOCODE}.osm.pbf"
+            if [ -f "$extracted_pbf" ] && [ ! "$source_pbf" -nt "$extracted_pbf" ]; then
+                echo "  Reusing cached extract: $(basename "$extracted_pbf")"
+            else
+                echo "  Extracting tile bbox from $(basename "$source_pbf")..."
+                if ! osmium extract --overwrite --strategy=complete_ways \
+                        --bbox="$TILE_MIN_LON,$TILE_MIN_LAT,$TILE_MAX_LON,$TILE_MAX_LAT" \
+                        "$source_pbf" -o "$extracted_pbf"; then
+                    echo "  WARNING: osmium extract failed; falling back to full source PBF"
+                    EXTRACTED_INPUT_FILES+=("$source_pbf")
+                    continue
+                fi
+            fi
+            extracted_size=$(wc -c < "$extracted_pbf")
+            extracted_mb=$((extracted_size / 1024 / 1024))
+            echo "  -> $(basename "$extracted_pbf") (${extracted_mb} MB)"
+            EXTRACTED_INPUT_FILES+=("$extracted_pbf")
+        done
+        INPUT_FILES=("${EXTRACTED_INPUT_FILES[@]}")
+    else
+        echo "WARNING: osmium not installed; skipping pre-clip optimization."
+        echo "         Install osmium-tool for ~10x faster runs (apt install osmium-tool)."
+    fi
+
     OUTPUT_FILE="$OUTPUT_DIR/out_$file_index.map"
-    
+
     echo "Running osmosis..."
     run_osmosis_map_writer "$requested_writer_type" "$effective_threads" "$effective_java_xms" "$effective_java_xmx"
     run_status=$?
