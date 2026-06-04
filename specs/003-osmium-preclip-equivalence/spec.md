@@ -8,6 +8,14 @@
 
 **Input**: User description: "Implement PR #1's osmium preclip optimization, but require semantic equality checks between output generated with and without osmium."
 
+## Clarifications
+
+### Session 2026-06-04
+
+- Q: What should the default preclip mode be when the feature first lands? → A: `disabled` by default; users explicitly enable preclip for test runs.
+- Q: What should count as the first real baseline-vs-preclip proof for `003`? → A: One-time Switzerland and UK baseline-vs-preclip comparisons; not required on every CI run.
+- Q: Where should routine CI stop for `003` once GitHub Actions exist? → A: CI runs pytest including fixture semantic comparison; real Switzerland/UK proof is manual/release-only.
+
 ## User Scenarios & Testing
 
 ### User Story 1 - Faster Large Tile Builds (Priority: P1)
@@ -76,6 +84,9 @@ A maintainer can change extraction settings without accidentally reusing stale c
 - **FR-006**: The implementation MUST provide a semantic Mapsforge comparison tool or test helper.
 - **FR-007**: At least one baseline-vs-preclip verification MUST compare generated `.map` outputs using semantic equality rules before the feature is considered complete.
 - **FR-008**: Documentation MUST explain that Osmium is provided by Docker or must be installed separately for native runs.
+- **FR-009**: Preclip mode MUST default to disabled when first released; users MUST explicitly enable `auto` or `required` mode for test runs.
+- **FR-010**: Before preclip is considered validated for release, maintainers MUST run and record one-time baseline-vs-preclip semantic comparisons for Switzerland and United Kingdom packages; this verification is not required on every CI run.
+- **FR-011**: Routine CI MUST run the Python test suite including semantic comparison fixture tests, but MUST NOT require full Switzerland or United Kingdom map generation.
 
 ### Key Entities
 
@@ -89,9 +100,10 @@ A maintainer can change extraction settings without accidentally reusing stale c
 
 - **SC-001**: Unit tests pass for command construction, cache metadata, and fallback behavior.
 - **SC-002**: A semantic comparison test fails on intentionally changed tag dictionaries.
-- **SC-003**: A documented baseline-vs-preclip check passes for at least one small real tile or fixture.
+- **SC-003**: Documented one-time baseline-vs-preclip checks pass for Switzerland and United Kingdom generated outputs.
 - **SC-004**: With Osmium unavailable, existing non-preclip workflows continue to pass current tests.
 - **SC-005**: With Osmium available in Docker, preclip creates a cache file and subsequent run reuses it.
+- **SC-006**: GitHub Actions or equivalent CI runs `uv run pytest -q` and covers the semantic comparison fixture tests without requiring full country map generation.
 
 ## Assumptions
 
