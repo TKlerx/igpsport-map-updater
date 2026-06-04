@@ -6,7 +6,7 @@ import tempfile
 
 import pytest
 
-from generate_maps_csv import (
+from igpsport_map_updater.generate_maps_csv import (
     base36_decode,
     bbox_area,
     bbox_intersection,
@@ -339,6 +339,43 @@ class TestRegionCountryCodes:
 
 
 class TestFindRegionSources:
+    def test_uk_western_tile_uses_ireland_northern_ireland_source(self):
+        map_bbox = (-8.22, 53.82, -5.05, 55.48)
+        regions = [
+            _make_country("United Kingdom", "united-kingdom", (-8.7, 49.8, 1.9, 60.9), "GB"),
+            _make_region("Great Britain", "great-britain", (-8.7, 49.8, 1.9, 60.9), parent="europe"),
+            _make_country(
+                "Ireland and Northern Ireland",
+                "ireland-and-northern-ireland",
+                (-10.7, 51.3, -5.0, 55.5),
+                "IE",
+            ),
+        ]
+
+        selection = find_region_sources(map_bbox, regions, country_code="UK")
+
+        assert selection is not None
+        assert selection["mode"] == "single"
+        assert selection["matches"][0]["feature"]["properties"]["id"] == "ireland-and-northern-ireland"
+
+    def test_uk_scotland_tile_does_not_use_low_overlap_ireland_source(self):
+        map_bbox = (-14.90, 54.52, 0.22, 61.14)
+        regions = [
+            _make_country("United Kingdom", "united-kingdom", (-8.7, 49.8, 1.9, 60.9), "GB"),
+            _make_region("Scotland", "scotland", (-8.7, 54.5, -0.5, 60.9), parent="united-kingdom"),
+            _make_country(
+                "Ireland and Northern Ireland",
+                "ireland-and-northern-ireland",
+                (-10.7, 51.3, -5.0, 55.5),
+                "IE",
+            ),
+        ]
+
+        selection = find_region_sources(map_bbox, regions, country_code="UK")
+
+        assert selection is not None
+        assert selection["matches"][0]["feature"]["properties"]["id"] != "ireland-and-northern-ireland"
+
     def test_prefers_multi_region_blend_over_country_fallback(self):
         map_bbox = (0.0, 0.0, 10.0, 10.0)
         regions = [

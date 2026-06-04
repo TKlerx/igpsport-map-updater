@@ -72,8 +72,19 @@ if (-not (Test-Path $OSMOSIS_WRAPPER)) {
     $content | Set-Content $OSMOSIS_WRAPPER
 }
 
-$TAG_CONF_FILE = Join-Path $SCRIPT_DIR "tag-igpsport.xml"
-$TAG_TRANSFORM_FILE = Join-Path $SCRIPT_DIR "tag-igpsport-transform.xml"
+$MAP_TAG_PROFILE = if ($env:MAP_TAG_PROFILE) { $env:MAP_TAG_PROFILE.ToLowerInvariant() } else { "enhanced" }
+if ($MAP_TAG_PROFILE -in @("igs630", "strict", "compat")) {
+    $TAG_CONF_FILE = Join-Path $SCRIPT_DIR "tag-igpsport-igs630.xml"
+    $TAG_TRANSFORM_FILE = Join-Path $SCRIPT_DIR "tag-igpsport-igs630-transform.xml"
+}
+elseif ($MAP_TAG_PROFILE -eq "enhanced") {
+    $TAG_CONF_FILE = Join-Path $SCRIPT_DIR "tag-igpsport.xml"
+    $TAG_TRANSFORM_FILE = Join-Path $SCRIPT_DIR "tag-igpsport-transform.xml"
+}
+else {
+    Write-Error "ERROR: Unsupported MAP_TAG_PROFILE '$MAP_TAG_PROFILE'. Use 'enhanced' or 'igs630'."
+    exit 1
+}
 $THREADS = if ($env:MAP_WRITER_THREADS) { [int]$env:MAP_WRITER_THREADS } else { $null }
 $MAP_WRITER_TYPE = if ($env:MAP_WRITER_TYPE) { $env:MAP_WRITER_TYPE } else { "auto" }
 $MAP_ALLOW_HD_FALLBACK = if ($env:MAP_ALLOW_HD_FALLBACK) { $env:MAP_ALLOW_HD_FALLBACK } else { "" }
@@ -86,6 +97,7 @@ $env:CLASSPATH = "$MAPSFORGE_WRITER_JAR;$env:CLASSPATH"
 # Create directories
 $DOWNLOAD_DIR = Join-Path $SCRIPT_DIR "download"
 $OUTPUT_DIR = Join-Path $SCRIPT_DIR "output"
+$INPUT_DIR = if ($env:MAP_INPUT_DIR) { $env:MAP_INPUT_DIR } else { "" }
 
 New-Item -ItemType Directory -Force -Path $TMP_DIR | Out-Null
 New-Item -ItemType Directory -Force -Path $DOWNLOAD_DIR | Out-Null
@@ -182,6 +194,7 @@ Write-Host "  Writer Type:  $MAP_WRITER_TYPE"
 Write-Host "  Threads:      $(if ($THREADS) { $THREADS } else { 'auto' })"
 Write-Host "  Java Heap:    $(if ($JAVA_XMS -or $JAVA_XMX) { "-Xms$JAVA_XMS -Xmx$JAVA_XMX" } else { 'auto' })"
 Write-Host "  Java tmpdir:  $TMP_DIR"
+Write-Host "  Tag Profile:  $MAP_TAG_PROFILE"
 Write-Host "  HD Fallback:  $(if ($MAP_ALLOW_HD_FALLBACK) { 'enabled' } else { 'disabled by default' })"
 Write-Host "  Resume:       $(if ($RESUME_MODE) { 'skip existing final maps' } else { 'off' })"
 Write-Host ""
@@ -483,6 +496,110 @@ function Find-ExistingOutputMap {
     return $null
 }
 
+function Get-BuildMetadataPath {
+    param([string]$mapPath)
+
+    return "$mapPath.build.json"
+}
+
+function New-BuildProfile {
+    param(
+        [string]$originalName,
+        [string]$countryCode,
+        [string]$productCode,
+        [string]$dateString,
+        [string]$geocode,
+        [string]$sourceMode,
+        [string[]]$inputFiles,
+        [string]$tagProfile,
+        [string]$tagConfFile,
+        [string]$tagTransformFile
+    )
+
+    return [ordered]@{
+        FormatVersion = "1"
+        OriginalName = $originalName
+        CountryCode = $countryCode
+        ProductCode = $productCode
+        SourceDate = $dateString
+        TileGeocode = $geocode
+        SourceMode = $sourceMode
+        PbfFiles = (($inputFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ";")
+        MapTagProfile = $tagProfile
+        Igs630HeaderPatch = if ($tagProfile -in @("igs630", "strict", "compat")) { "created_by_from_original" } else { "off" }
+        TagConfFile = (Split-Path $tagConfFile -Leaf)
+        TagTransformFile = (Split-Path $tagTransformFile -Leaf)
+        MapsforgeWriterVersion = $MAPSFORGE_WRITER_VERSION
+        ZoomIntervalConf = "13,13,13,14,14,14"
+    }
+}
+
+function Test-BuildProfileMatch {
+    param(
+        [string]$mapPath,
+        [System.Collections.IDictionary]$expectedProfile
+    )
+
+    $metadataPath = Get-BuildMetadataPath $mapPath
+    if (-not (Test-Path $metadataPath)) {
+        return $false
+    }
+
+    try {
+        $actualProfile = Get-Content $metadataPath -Raw | ConvertFrom-Json
+        foreach ($key in $expectedProfile.Keys) {
+            if (-not ($actualProfile.PSObject.Properties.Name -contains $key)) {
+                return $false
+            }
+            if ([string]$actualProfile.$key -ne [string]$expectedProfile[$key]) {
+                return $false
+            }
+        }
+    }
+    catch {
+        return $false
+    }
+
+    return $true
+}
+
+function Write-BuildProfile {
+    param(
+        [string]$mapPath,
+        [System.Collections.IDictionary]$profile
+    )
+
+    $metadataPath = Get-BuildMetadataPath $mapPath
+    $profile | ConvertTo-Json | Set-Content -Path $metadataPath -Encoding UTF8
+}
+
+function Repair-Igs630MapHeader {
+    param(
+        [string]$originalMap,
+        [string]$generatedMap
+    )
+
+    if ($MAP_TAG_PROFILE -notin @("igs630", "strict", "compat")) {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($originalMap) -or -not (Test-Path $originalMap)) {
+        throw "Original map for iGS630 header patch not found: $originalMap"
+    }
+
+    $patchScript = Join-Path $SCRIPT_DIR "patch_mapsforge_header.py"
+    if (-not (Test-Path $patchScript)) {
+        throw "iGS630 header patch script not found: $patchScript"
+    }
+
+    $pythonExe = if ($env:PYTHON) { $env:PYTHON } else { "python" }
+    Write-Host "Applying iGS630 header compatibility patch..."
+    & $pythonExe $patchScript $originalMap $generatedMap
+    if ($LASTEXITCODE -ne 0) {
+        throw "iGS630 header compatibility patch failed."
+    }
+}
+
 function Get-PhysicalMemoryStatus {
     $mem = New-Object CodexMemoryStatus+MEMORYSTATUSEX
     $mem.dwLength = [System.Runtime.InteropServices.Marshal]::SizeOf($mem)
@@ -533,7 +650,7 @@ function Get-AutoMapWriterConfig {
     $sizeMb = [math]::Round($pbfSizeBytes / 1MB, 1)
     $totalGb = [math]::Round($totalPhysicalBytes / 1GB, 2)
     $minRamHeapBytes = 4GB
-    $maxAutoHeapBytes = [int64][math]::Floor($totalPhysicalBytes * 2 / 3)
+    $maxAutoHeapBytes = [int64][math]::Floor($totalPhysicalBytes * 4 / 5)
     $maxAutoHeapString = Convert-BytesToHeapString $maxAutoHeapBytes
 
     if ($pbfSizeBytes -le 350MB) {
@@ -675,6 +792,7 @@ function Invoke-OsmosisMapWriter {
 
 $file_index = 0
 $total_files = $MAP_ENTRIES.Count
+$failure_count = 0
 $stopwatch_total = [System.Diagnostics.Stopwatch]::StartNew()
 
 for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
@@ -703,21 +821,38 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
     # Extract product code from original filename (characters 2-5, 0-indexed)
     $PRODUCT_CODE = $ORIGINAL_NAME.Substring(2, 4)
     $TILE_BBOX = Get-OriginalTileBbox $ORIGINAL_NAME
+    $sourceMode = if ($INPUT_FILES.Count -eq 1) { "single-region" } else { "multi-region blend ($($INPUT_FILES.Count) sources)" }
 
     # Extract date from PBF file before processing
     Write-Host "Extracting date from PBF file..."
     $date_string = Get-CombinedPbfDate $INPUT_FILES
+    $buildProfile = New-BuildProfile `
+        -originalName $ORIGINAL_NAME `
+        -countryCode $COUNTRY_CODE `
+        -productCode $PRODUCT_CODE `
+        -dateString $date_string `
+        -geocode $TILE_BBOX.Geocode `
+        -sourceMode $sourceMode `
+        -inputFiles $INPUT_FILES `
+        -tagProfile $MAP_TAG_PROFILE `
+        -tagConfFile $TAG_CONF_FILE `
+        -tagTransformFile $TAG_TRANSFORM_FILE
     $existingOutput = if ($RESUME_MODE) {
         Find-ExistingOutputMap -outputDir $OUTPUT_DIR -countryCode $COUNTRY_CODE -productCode $PRODUCT_CODE -dateString $date_string -geocode $TILE_BBOX.Geocode
     } else {
         $null
+    }
+    $existingOutputMatchesProfile = if ($existingOutput) {
+        Test-BuildProfileMatch -mapPath $existingOutput -expectedProfile $buildProfile
+    } else {
+        $false
     }
 
     Write-Host "=========================================="
     Write-Host "Processing [$file_index/$total_files]"
     Write-Host "  PBF File:      $file_name"
     Write-Host "  Poly File:     $(if ($POLY_FILES.Count -eq 1) { Split-Path $POLY_FILES[0] -Leaf } else { "$($POLY_FILES.Count) matching polygons" })"
-    Write-Host "  Source Mode:   $(if ($INPUT_FILES.Count -eq 1) { 'single-region' } else { "multi-region blend ($($INPUT_FILES.Count) sources)" })"
+    Write-Host "  Source Mode:   $sourceMode"
     Write-Host "  Original Name: $ORIGINAL_NAME"
     Write-Host "  Country Code:  $COUNTRY_CODE"
     Write-Host "  Product Code:  $PRODUCT_CODE"
@@ -731,7 +866,7 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
     Write-Host "  Java Heap:     -Xms$effectiveJavaXms -Xmx$effectiveJavaXmx"
     if ($MAP_WRITER_TYPE -eq "auto") {
         if ($autoConfig.Reason -eq "ram_capped_by_total_ram") {
-            Write-Host "  Auto Decision: ram profile capped to about 2/3 of installed RAM"
+            Write-Host "  Auto Decision: ram profile capped to about 80% of installed RAM"
         }
         elseif ($autoConfig.Reason -eq "ram_limited_by_total_ram") {
             Write-Host "  Auto Decision: total RAM below preferred profile, using capped ram"
@@ -742,10 +877,19 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
     }
     Write-Host "=========================================="
 
-    if ($existingOutput) {
+    if ($existingOutput -and $existingOutputMatchesProfile) {
         Write-Host "Skipping existing output in resume mode: $(Split-Path $existingOutput -Leaf)"
         Write-Host ""
         continue
+    }
+    elseif ($existingOutput) {
+        $metadataPath = Get-BuildMetadataPath $existingOutput
+        if (Test-Path $metadataPath) {
+            Write-Host "Existing output does not match current build profile; rebuilding: $(Split-Path $existingOutput -Leaf)"
+        }
+        else {
+            Write-Host "Existing output has no build profile metadata; rebuilding: $(Split-Path $existingOutput -Leaf)"
+        }
     }
 
     $OUTPUT_FILE = Join-Path $OUTPUT_DIR "out_$file_index.map"
@@ -800,6 +944,7 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
 
     if (-not $runSucceeded) {
         Write-Warning "Osmosis did not generate file for: $file_name - skipping"
+        $failure_count++
         continue
     }
 
@@ -819,6 +964,7 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
         
         if ($magic -ne $MAGIC_STRING) {
             Write-Warning "Invalid .map file for: $file_name - skipping"
+            $failure_count++
             continue
         }
         
@@ -858,12 +1004,16 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
             Remove-Item $new_path -Force
         }
         
+        $originalMapPath = Join-Path $INPUT_DIR $ORIGINAL_NAME
+        Repair-Igs630MapHeader -originalMap $originalMapPath -generatedMap $OUTPUT_FILE
         Move-Item $OUTPUT_FILE $new_path
+        Write-BuildProfile -mapPath $new_path -profile $buildProfile
         
         Write-Host ""
     }
     catch {
         Write-Warning "Error processing file: $_"
+        $failure_count++
         if ($reader) { $reader.Close() }
         if ($stream) { $stream.Close() }
     }
@@ -874,4 +1024,8 @@ $stopwatch_total.Stop()
 
 Write-Host "=========================================="
 Write-Host "Done! Processed $total_files files in $([math]::Round($stopwatch_total.Elapsed.TotalMinutes, 1)) minutes."
+if ($failure_count -gt 0) {
+    Write-Host "Failed: $failure_count file(s)."
+    exit 1
+}
 Write-Host "=========================================="

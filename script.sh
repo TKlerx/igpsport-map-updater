@@ -55,8 +55,22 @@ if [ ! -f "$OSMOSIS_WRAPPER" ]; then
     chmod +x "$OSMOSIS_WRAPPER"
 fi
 
-TAG_CONF_FILE="$SCRIPT_DIR/tag-igpsport.xml"
-TAG_TRANSFORM_FILE="$SCRIPT_DIR/tag-igpsport-transform.xml"
+MAP_TAG_PROFILE="${MAP_TAG_PROFILE:-enhanced}"
+MAP_TAG_PROFILE="$(echo "$MAP_TAG_PROFILE" | tr '[:upper:]' '[:lower:]')"
+case "$MAP_TAG_PROFILE" in
+    igs630|strict|compat)
+        TAG_CONF_FILE="$SCRIPT_DIR/tag-igpsport-igs630.xml"
+        TAG_TRANSFORM_FILE="$SCRIPT_DIR/tag-igpsport-igs630-transform.xml"
+        ;;
+    enhanced)
+        TAG_CONF_FILE="$SCRIPT_DIR/tag-igpsport.xml"
+        TAG_TRANSFORM_FILE="$SCRIPT_DIR/tag-igpsport-transform.xml"
+        ;;
+    *)
+        echo "ERROR: Unsupported MAP_TAG_PROFILE '$MAP_TAG_PROFILE'. Use 'enhanced' or 'igs630'." >&2
+        exit 1
+        ;;
+esac
 THREADS="${MAP_WRITER_THREADS:-}"
 MAP_WRITER_TYPE="${MAP_WRITER_TYPE:-auto}"
 MAP_ALLOW_HD_FALLBACK="${MAP_ALLOW_HD_FALLBACK:-}"
@@ -69,6 +83,7 @@ export CLASSPATH="$OSMOSIS_DIR/lib/mapsforge-map-writer-${MAPSFORGE_WRITER_VERSI
 # Create directories
 DOWNLOAD_DIR="$SCRIPT_DIR/download"
 OUTPUT_DIR="$SCRIPT_DIR/output"
+INPUT_DIR="${MAP_INPUT_DIR:-}"
 
 mkdir -p "$TMP_DIR"
 mkdir -p "$DOWNLOAD_DIR"
@@ -169,6 +184,7 @@ else
     echo "  Java Heap:    auto"
 fi
 echo "  Java tmpdir:  $TMP_DIR"
+echo "  Tag Profile:  $MAP_TAG_PROFILE"
 echo "  HD Fallback:  $(if [ -n "$MAP_ALLOW_HD_FALLBACK" ]; then echo "enabled"; else echo "disabled by default"; fi)"
 echo "  Resume:       $(if [ -n "$RESUME_MODE" ]; then echo "skip existing final maps"; else echo "off"; fi)"
 echo ""
@@ -356,6 +372,105 @@ find_existing_output_map() {
     return 1
 }
 
+build_metadata_path() {
+    echo "$1.build.json"
+}
+
+join_input_basenames() {
+    local joined=""
+    local input_file
+    for input_file in "$@"; do
+        if [ -n "$joined" ]; then
+            joined="${joined};"
+        fi
+        joined="${joined}$(basename "$input_file")"
+    done
+    echo "$joined"
+}
+
+metadata_value_matches() {
+    local metadata_path="$1"
+    local key="$2"
+    local value="$3"
+
+    grep -F "\"$key\": \"$value\"" "$metadata_path" >/dev/null 2>&1
+}
+
+build_profile_matches() {
+    local map_path="$1"
+    local metadata_path
+    metadata_path=$(build_metadata_path "$map_path")
+
+    if [ ! -f "$metadata_path" ]; then
+        return 1
+    fi
+
+    metadata_value_matches "$metadata_path" "FormatVersion" "1" &&
+    metadata_value_matches "$metadata_path" "OriginalName" "$ORIGINAL_NAME" &&
+    metadata_value_matches "$metadata_path" "CountryCode" "$COUNTRY_CODE" &&
+    metadata_value_matches "$metadata_path" "ProductCode" "$PRODUCT_CODE" &&
+    metadata_value_matches "$metadata_path" "SourceDate" "$date_string" &&
+    metadata_value_matches "$metadata_path" "TileGeocode" "$TILE_GEOCODE" &&
+    metadata_value_matches "$metadata_path" "SourceMode" "$source_mode" &&
+    metadata_value_matches "$metadata_path" "PbfFiles" "$build_pbf_files" &&
+    metadata_value_matches "$metadata_path" "MapTagProfile" "$MAP_TAG_PROFILE" &&
+    metadata_value_matches "$metadata_path" "Igs630HeaderPatch" "$igs630_header_patch" &&
+    metadata_value_matches "$metadata_path" "TagConfFile" "$(basename "$TAG_CONF_FILE")" &&
+    metadata_value_matches "$metadata_path" "TagTransformFile" "$(basename "$TAG_TRANSFORM_FILE")" &&
+    metadata_value_matches "$metadata_path" "MapsforgeWriterVersion" "$MAPSFORGE_WRITER_VERSION" &&
+    metadata_value_matches "$metadata_path" "ZoomIntervalConf" "13,13,13,14,14,14"
+}
+
+write_build_profile() {
+    local map_path="$1"
+    local metadata_path
+    metadata_path=$(build_metadata_path "$map_path")
+
+    cat > "$metadata_path" <<EOF
+{
+  "FormatVersion": "1",
+  "OriginalName": "$ORIGINAL_NAME",
+  "CountryCode": "$COUNTRY_CODE",
+  "ProductCode": "$PRODUCT_CODE",
+  "SourceDate": "$date_string",
+  "TileGeocode": "$TILE_GEOCODE",
+  "SourceMode": "$source_mode",
+  "PbfFiles": "$build_pbf_files",
+  "MapTagProfile": "$MAP_TAG_PROFILE",
+  "Igs630HeaderPatch": "$igs630_header_patch",
+  "TagConfFile": "$(basename "$TAG_CONF_FILE")",
+  "TagTransformFile": "$(basename "$TAG_TRANSFORM_FILE")",
+  "MapsforgeWriterVersion": "$MAPSFORGE_WRITER_VERSION",
+  "ZoomIntervalConf": "13,13,13,14,14,14"
+}
+EOF
+}
+
+repair_igs630_map_header() {
+    local original_map="$1"
+    local generated_map="$2"
+
+    case "$MAP_TAG_PROFILE" in
+        igs630|strict|compat) ;;
+        *) return 0 ;;
+    esac
+
+    if [ -z "$original_map" ] || [ ! -f "$original_map" ]; then
+        echo "ERROR: Original map for iGS630 header patch not found: $original_map" >&2
+        return 1
+    fi
+
+    local patch_script="$SCRIPT_DIR/patch_mapsforge_header.py"
+    if [ ! -f "$patch_script" ]; then
+        echo "ERROR: iGS630 header patch script not found: $patch_script" >&2
+        return 1
+    fi
+
+    local python_exe="${PYTHON:-python3}"
+    echo "Applying iGS630 header compatibility patch..."
+    "$python_exe" "$patch_script" "$original_map" "$generated_map"
+}
+
 convert_to_base36() {
     local value=$1
     local length=$2
@@ -491,7 +606,7 @@ get_auto_map_writer_config() {
     local pbf_size_bytes="$1"
     local total_physical_bytes="$2"
     local min_ram_heap_bytes=$((4 * 1024 * 1024 * 1024))
-    local max_auto_heap_bytes=$((total_physical_bytes * 2 / 3))
+    local max_auto_heap_bytes=$((total_physical_bytes * 4 / 5))
     local max_auto_heap_string
     max_auto_heap_string=$(bytes_to_heap_string "$max_auto_heap_bytes")
 
@@ -574,6 +689,7 @@ run_osmosis_map_writer() {
 }
 
 file_index=0
+failure_count=0
 for i in "${!PBF_FILES[@]}"; do
     file_index=$((file_index + 1))
     IFS=';' read -r -a INPUT_FILES <<< "${PBF_FILES[$i]}"
@@ -617,6 +733,16 @@ for i in "${!PBF_FILES[@]}"; do
     # Extract product code from original filename (characters 2-5, 0-indexed)
     PRODUCT_CODE="${ORIGINAL_NAME:2:4}"
     get_original_tile_bbox "$ORIGINAL_NAME"
+    if [ "${#INPUT_FILES[@]}" -eq 1 ]; then
+        source_mode="single-region"
+    else
+        source_mode="multi-region blend (${#INPUT_FILES[@]} sources)"
+    fi
+    build_pbf_files=$(join_input_basenames "${INPUT_FILES[@]}")
+    case "$MAP_TAG_PROFILE" in
+        igs630|strict|compat) igs630_header_patch="created_by_from_original" ;;
+        *) igs630_header_patch="off" ;;
+    esac
     
     # Extract date from PBF file before processing
     echo "Extracting date from PBF file..."
@@ -630,7 +756,7 @@ for i in "${!PBF_FILES[@]}"; do
     echo "Processing [$file_index/${#PBF_FILES[@]}]"
     echo "  PBF File:      $file_name"
     echo "  Poly File:     $poly_name"
-    echo "  Source Mode:   $(if [ "${#INPUT_FILES[@]}" -eq 1 ]; then echo "single-region"; else echo "multi-region blend (${#INPUT_FILES[@]} sources)"; fi)"
+    echo "  Source Mode:   $source_mode"
     echo "  Original Name: $ORIGINAL_NAME"
     echo "  Country Code:  $COUNTRY_CODE"
     echo "  Product Code:  $PRODUCT_CODE"
@@ -644,7 +770,7 @@ for i in "${!PBF_FILES[@]}"; do
     echo "  Java Heap:     -Xms$effective_java_xms -Xmx$effective_java_xmx"
     if [ "$MAP_WRITER_TYPE" = "auto" ]; then
         if [ "$auto_reason" = "ram_capped_by_total_ram" ]; then
-            echo "  Auto Decision: ram profile capped to about 2/3 of installed RAM"
+            echo "  Auto Decision: ram profile capped to about 80% of installed RAM"
         elif [ "$auto_reason" = "ram_limited_by_total_ram" ]; then
             echo "  Auto Decision: total RAM below preferred profile, using capped ram"
         else
@@ -653,10 +779,17 @@ for i in "${!PBF_FILES[@]}"; do
     fi
     echo "=========================================="
 
-    if [ -n "$existing_output" ]; then
+    if [ -n "$existing_output" ] && build_profile_matches "$existing_output"; then
         echo "Skipping existing output in resume mode: $(basename "$existing_output")"
         echo ""
         continue
+    elif [ -n "$existing_output" ]; then
+        metadata_path=$(build_metadata_path "$existing_output")
+        if [ -f "$metadata_path" ]; then
+            echo "Existing output does not match current build profile; rebuilding: $(basename "$existing_output")"
+        else
+            echo "Existing output has no build profile metadata; rebuilding: $(basename "$existing_output")"
+        fi
     fi
     
     OUTPUT_FILE="$OUTPUT_DIR/out_$file_index.map"
@@ -688,6 +821,7 @@ for i in "${!PBF_FILES[@]}"; do
     
     if [ $run_status -ne 0 ] || [ ! -f "$OUTPUT_FILE" ]; then
         echo "WARNING: Osmosis did not generate file for: $file_name - skipping"
+        failure_count=$((failure_count + 1))
         continue
     fi
 
@@ -703,6 +837,7 @@ for i in "${!PBF_FILES[@]}"; do
         
         if [ "$magic" != "$MAGIC_STRING" ]; then
             echo "WARNING: Invalid .map file for: $file_name - skipping"
+            failure_count=$((failure_count + 1))
             continue
         fi
         
@@ -763,7 +898,14 @@ for i in "${!PBF_FILES[@]}"; do
             rm -f "$new_path"
         fi
         
+        original_map_path="$INPUT_DIR/$ORIGINAL_NAME"
+        if ! repair_igs630_map_header "$original_map_path" "$OUTPUT_FILE"; then
+            echo "WARNING: Error processing file: iGS630 header compatibility patch failed"
+            failure_count=$((failure_count + 1))
+            continue
+        fi
         mv "$OUTPUT_FILE" "$new_path"
+        write_build_profile "$new_path"
         
         echo ""
     } < "$OUTPUT_FILE"
@@ -771,4 +913,8 @@ done
 
 echo "=========================================="
 echo "Done! Processed ${#PBF_FILES[@]} files."
+if [ "$failure_count" -gt 0 ]; then
+    echo "Failed: $failure_count file(s)."
+    exit 1
+fi
 echo "=========================================="

@@ -54,4 +54,5 @@ if ($Resume) {
     Write-Host ""
 }
 
+$env:MAP_INPUT_DIR = (Resolve-Path $MAPS_DIR).Path
 & (Join-Path $SCRIPT_DIR "script.ps1")

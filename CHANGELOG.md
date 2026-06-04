@@ -5,6 +5,13 @@ This changelog documents notable changes made in this fork after diverging from 
 ## Unreleased
 
 ### Added
+- Added experimental BiNavi package tooling that preserves Router and contour/overview files while replacing the main generated map.
+- Added a BiNavi backlog document for DEM/contour generation, router files, and richer BiNavi tag mapping.
+- Added an `igs630` tag profile for stricter compatibility with older iGS630 devices.
+- Added optional iGS630 `map_md5_list.cfg` refresh support for packages, using actual generated map checksums.
+- Added per-map build metadata so resume mode rebuilds maps when tag profile or other generation settings changed.
+- Added iGS630-aware package naming; `MAP_TAG_PROFILE=igs630` now defaults to `IGPSport-iGS630-<Country>.zip`.
+- Added an iGS630 header compatibility patch that copies the original map's Mapsforge `created_by` value into generated iGS630 maps.
 - Added `ATTRIBUTION.md` with OpenStreetMap attribution text and sharing guidance for generated maps.
 - Added an optional Google Drive link for separately shared unofficial generated maps.
 - Added `MAP_PACKAGE_README.txt` for shared map folders and ZIP packages.
@@ -25,7 +32,7 @@ This changelog documents notable changes made in this fork after diverging from 
 - Updated `script.ps1` and `script.sh` to make Mapsforge writer tuning configurable.
 - Changed the default writer behavior from fixed `hd` mode to adaptive `auto` mode.
 - Added RAM-first Mapsforge execution with automatic retry in `hd` mode if the RAM attempt fails.
-- Added adaptive Java heap sizing capped to about two thirds of installed RAM.
+- Added adaptive Java heap sizing capped to about 80% of installed RAM.
 - Reduced default thread pressure for larger extracts to avoid excessive memory and IO usage.
 - Updated the README to describe the new workflow, project setup, adaptive writer behavior, and troubleshooting guidance.
 - Updated `generate_maps_csv.py` so one `maps.csv` row can now contain semicolon-separated PBF/poly source lists.

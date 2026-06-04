@@ -3,7 +3,12 @@
 from argparse import Namespace
 from pathlib import Path
 
-from build_map_package import display_label, main, safe_slug, workflow_commands
+from igpsport_map_updater.build_map_package import (
+    display_label,
+    main,
+    safe_slug,
+    workflow_commands,
+)
 
 
 def test_safe_slug():
@@ -26,6 +31,8 @@ def test_workflow_commands_include_download_generate_and_package(monkeypatch):
         output_dir="output",
         name=None,
         label=None,
+        package_prefix=None,
+        md5_cfg=None,
     )
 
     commands = workflow_commands(args, Path("tmp/igpsport-official-switzerland/input"))
@@ -49,14 +56,20 @@ def test_workflow_commands_can_override_package_name():
         output_dir="custom-output",
         name="IGPSport300-800-Switzerland.zip",
         label=None,
+        package_prefix="IGPSport-iGS630",
+        md5_cfg="map_md5_list.cfg",
     )
 
     commands = workflow_commands(args, Path("tmp/in"))
 
     assert "--keep-zip" in commands[0]
-    assert commands[2][-2:] == ["--name", "IGPSport300-800-Switzerland.zip"]
+    assert "--name" in commands[2]
+    assert "IGPSport300-800-Switzerland.zip" in commands[2]
     assert "--output-dir" in commands[2]
     assert "custom-output" in commands[2]
+    assert "--package-prefix" in commands[2]
+    assert "IGPSport-iGS630" in commands[2]
+    assert commands[2][-2:] == ["--md5-cfg", "map_md5_list.cfg"]
 
 
 def test_clean_work_removes_region_work_folder(tmp_path, monkeypatch):
@@ -65,7 +78,7 @@ def test_clean_work_removes_region_work_folder(tmp_path, monkeypatch):
     def fake_run_command(command, dry_run=False):
         calls.append((command, dry_run))
 
-    monkeypatch.setattr("build_map_package.run_command", fake_run_command)
+    monkeypatch.setattr("igpsport_map_updater.build_map_package.run_command", fake_run_command)
     monkeypatch.setattr(
         "sys.argv",
         [

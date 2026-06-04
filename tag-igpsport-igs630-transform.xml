@@ -1,0 +1,122 @@
+<?xml version="1.0"?>
+<translations>
+    <translation>
+        <name>highway motorway -&gt; trunk</name>
+        <description>Map unsupported highway=motorway to highway=trunk for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="motorway"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="trunk"/>
+        </output>
+    </translation>
+
+    <translation>
+        <name>highway motorway_link -&gt; trunk_link</name>
+        <description>Map unsupported highway=motorway_link to highway=trunk_link for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="motorway_link"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="trunk_link"/>
+        </output>
+    </translation>
+
+    <translation>
+        <name>highway steps -&gt; pedestrian</name>
+        <description>Map unsupported steps to pedestrian for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="steps"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="pedestrian"/>
+        </output>
+    </translation>
+
+    <translation>
+        <name>highway bridleway -&gt; cycleway</name>
+        <description>Map unsupported bridleway to cycleway for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="bridleway"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="cycleway"/>
+        </output>
+    </translation>
+
+    <translation>
+        <name>highway byway -&gt; track</name>
+        <description>Map unsupported byway to track for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="byway"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="track"/>
+        </output>
+    </translation>
+
+    <translation>
+        <name>highway sidewalk -&gt; cycleway</name>
+        <description>Map unsupported sidewalk to cycleway for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="sidewalk"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="cycleway"/>
+        </output>
+    </translation>
+
+    <translation>
+        <name>highway bus_guideway -&gt; road</name>
+        <description>Map unsupported bus_guideway to road for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="bus_guideway"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="road"/>
+        </output>
+    </translation>
+
+    <translation>
+        <name>highway construction -&gt; road</name>
+        <description>Map unsupported construction to road for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="construction"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="road"/>
+        </output>
+    </translation>
+
+    <translation>
+        <name>highway raceway -&gt; road</name>
+        <description>Map unsupported raceway to road for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="raceway"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="road"/>
+        </output>
+    </translation>
+
+    <translation>
+        <name>highway services -&gt; service</name>
+        <description>Map unsupported services to service for iGS630 compatibility.</description>
+        <match type="way">
+            <tag k="highway" v="services"/>
+        </match>
+        <output>
+            <copy-unmatched/>
+            <tag k="highway" v="service"/>
+        </output>
+    </translation>
+</translations>

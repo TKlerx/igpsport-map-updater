@@ -56,4 +56,5 @@ if [ "$RESUME_MODE" -eq 1 ]; then
     echo ""
 fi
 
+export MAP_INPUT_DIR="$(cd "$MAPS_DIR" && pwd)"
 "$SCRIPT_DIR/script.sh"

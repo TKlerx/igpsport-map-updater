@@ -1,6 +1,6 @@
 """Tests for download_igpsport_maps.py"""
 
-from download_igpsport_maps import (
+from igpsport_map_updater.download_igpsport_maps import (
     common_path_prefix,
     country_regions,
     existing_extracted_maps,

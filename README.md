@@ -13,6 +13,8 @@ A tool to generate custom map files for IGPSPORT cycling computers from OpenStre
 
 Official support/download page: https://www.igpsport.com/en/support/product
 
+BiNavi support is experimental and intentionally separated from the BSC300/iGS630 workflow. It can replace the main visual `.map` file inside an official BiNavi package, but it preserves official `Router/*.rtd` and contour/overview map files because this project cannot regenerate them yet.
+
 Unofficial generated maps may be shared separately here:
 https://drive.google.com/drive/folders/1NY_q-Hvnez6VN00m43LLvkheAtAw5vA2
 
@@ -107,74 +109,17 @@ See the [Mapsforge tag-mapping reference](https://github.com/mapsforge/mapsforge
 
 ## Quick Start
 
-### 1. Backup your original maps
+### 1. Build a country package
 
-Connect your iGPSport device via USB and copy all `.map` files from the device to a folder on your computer (e.g., `backup/`). **Keep this backup safe** — you'll need it if you ever want to revert.
-
-If you do not already have the original files, you can download official map ZIPs from the iGPSPORT support API:
-
-```bash
-uv run python download_igpsport_maps.py switzerland --list
-uv run python download_igpsport_maps.py switzerland --download -o input
-uv run python download_igpsport_maps.py aargau --download -o input
-```
-
-The downloader uses the same public map tree as the iGPSPORT support page, saves the ZIPs, and extracts the contained `.map` files. Those extracted maps can then be used as the input directory for `run.ps1` / `run.sh`.
-
-### 2. Run the updater
-
-The `run` script does everything in one go: it reads your original map filenames to figure out which regions you need, generates `maps.csv`, downloads the latest OpenStreetMap data, and generates updated `.map` files in the `output/` directory.
+The easiest path is the one-command package builder. It downloads the official iGPSPORT map files for the requested region, generates updated OpenStreetMap-based `.map` files, and writes a shareable ZIP to `packages/`.
 
 #### Windows
 
 ```powershell
-.\run.ps1 backup\
-.\run.ps1 input -Resume
+uv run python build_map_package.py switzerland
 ```
 
 #### Unix/Linux/macOS
-
-```bash
-chmod +x run.sh
-./run.sh backup/
-./run.sh input --resume
-```
-
-This takes a while depending on the number and size of regions.
-
-If you prefer to run the steps separately (e.g., to edit `maps.csv` before generating), see [Running Step by Step](#running-step-by-step).
-
-`run.ps1` / `run.sh` are the full end-to-end workflow. `script.ps1` / `script.sh` are the map-generation-only step and assume `maps.csv` already exists.
-
-### 3. Copy maps to your device
-
-1. Delete the old maps from your iGPSport device
-2. Copy the new `.map` files from `output/` to your device
-3. Safely eject and restart the device
-
-### 4. Package maps for sharing
-
-To create a shareable ZIP from generated maps, package them with the original input directory used for generation:
-
-```powershell
-uv run python package_maps.py input
-```
-
-```bash
-uv run python package_maps.py input
-```
-
-The package is written to `packages/` and includes matching generated `.map` files from `output/`, `README.txt` from [MAP_PACKAGE_README.txt](MAP_PACKAGE_README.txt), and `MANIFEST.txt` with the generator commit, included maps, and original input filenames.
-
-The default ZIP name is derived from the input country, for example `IGPSport300-800-Switzerland.zip`. Use `--label` or `--name` to override it.
-
-### One-command country package
-
-If you want the downloader, generator, and packager in one command:
-
-```powershell
-uv run python build_map_package.py switzerland
-```
 
 ```bash
 uv run python build_map_package.py switzerland
@@ -182,12 +127,82 @@ uv run python build_map_package.py switzerland
 
 This downloads the official original maps into `tmp/igpsport-official-switzerland/input`, runs the generator with resume mode, and creates `packages/IGPSport300-800-Switzerland.zip`. Use `--dry-run` to print the commands without downloading or generating maps.
 
-The workflow is resumable: existing official input maps in `tmp/igpsport-official-<region>/input` are skipped, and existing generated output maps are skipped by the generator's resume mode.
+For iGS630/iGS630S/iGS800 compatibility builds, use the stricter profile:
+
+#### Windows
+
+```powershell
+$env:MAP_TAG_PROFILE = "igs630"
+uv run python build_map_package.py switzerland --package-prefix IGPSport-iGS630
+```
+
+#### Unix/Linux/macOS
+
+```bash
+MAP_TAG_PROFILE=igs630 uv run python build_map_package.py switzerland --package-prefix IGPSport-iGS630
+```
+
+The workflow is resumable: existing official input maps in `tmp/igpsport-official-<region>/input` are skipped, and existing generated output maps are skipped by the generator's resume mode when their build metadata matches the current settings.
 
 By default, the work folder is kept so reruns can resume. Use `--clean-work` to delete that country work folder after a successful package build:
 
 ```powershell
 uv run python build_map_package.py switzerland --clean-work
+```
+
+### 2. Copy maps to your device
+
+1. Delete the old maps from your iGPSport device
+2. Extract the ZIP in `packages/` and copy the new `.map` files to your device
+3. Safely eject and restart the device
+
+Keep a backup of your original device maps somewhere safe before deleting anything from the device.
+
+### Optional: use local original maps
+
+If you already copied official `.map` files from your device, or you want to build from a manually downloaded set, put those files in a folder such as `input/` and run the updater directly.
+
+The `run` script reads the original map filenames to figure out which regions you need, generates `maps.csv`, downloads the latest OpenStreetMap data, and generates updated `.map` files in `output/`.
+
+```powershell
+.\run.ps1 input -Resume
+```
+
+```bash
+chmod +x run.sh
+./run.sh input --resume
+```
+
+You can also download official map ZIPs into `input/` yourself:
+
+```bash
+uv run python download_igpsport_maps.py switzerland --list
+uv run python download_igpsport_maps.py switzerland --download -o input
+uv run python download_igpsport_maps.py aargau --download -o input
+```
+
+If you prefer to run the steps separately or edit `maps.csv` before generating, see [Running Step by Step](#running-step-by-step).
+
+`run.ps1` / `run.sh` are the full local-input workflow. `script.ps1` / `script.sh` are the map-generation-only step and assume `maps.csv` already exists.
+
+### Optional: package existing output
+
+To create a shareable ZIP from maps already generated in `output/`, package them with the original input directory used for generation:
+
+```powershell
+uv run python package_maps.py input
+```
+
+```bash
+uv run python package_maps.py input
+```
+
+The package includes matching generated `.map` files, `README.txt` from [MAP_PACKAGE_README.txt](MAP_PACKAGE_README.txt), and `MANIFEST.txt` with the generator commit, included maps, and original input filenames.
+
+Older iGS630 devices may use `map_md5_list.cfg` to validate installed maps. If your device has that file, pass it to the packager so the ZIP includes a refreshed copy with checksums for the generated map filenames:
+
+```powershell
+uv run python package_maps.py input --md5-cfg tmp\test-630\map_md5_list.cfg
 ```
 
 ## Running Step by Step
@@ -197,7 +212,7 @@ You can also run each step individually, which is useful if you want to review o
 ### Step 1: Generate maps.csv
 
 ```bash
-uv run python generate_maps_csv.py backup/
+uv run python generate_maps_csv.py input/
 ```
 
 The script reads the iGPSport filenames, figures out which geographic regions they cover, and finds the matching download URLs from [Geofabrik](https://download.geofabrik.de/). Review the output to verify the matched regions are correct.
@@ -223,12 +238,29 @@ chmod +x script.sh
 
 By default, the generator now uses an adaptive Mapsforge configuration:
 - It prefers the in-memory (`ram`) writer to avoid excessive temp-file IO.
-- It caps Java heap to about two thirds of installed RAM.
+- It caps Java heap to about 80% of installed RAM.
 - It does not fall back to the disk-backed (`hd`) writer unless explicitly enabled.
 - It sizes RAM heuristics from the total source size for that map row, including multi-region blends.
 - It uses the capped heap even for small extracts, because OSM density can matter more than PBF file size.
 
-You can still override this manually with `MAP_WRITER_TYPE`, `MAP_WRITER_THREADS`, `JAVA_XMS`, `JAVA_XMX`, and `JAVA_TMP_DIR`. If you want the old slow-but-stubborn HD retry behavior, set `MAP_ALLOW_HD_FALLBACK=1`.
+You can still override this manually with `MAP_WRITER_TYPE`, `MAP_WRITER_THREADS`, `JAVA_XMS`, `JAVA_XMX`, `JAVA_TMP_DIR`, and `MAP_TAG_PROFILE`. If you want the old slow-but-stubborn HD retry behavior, set `MAP_ALLOW_HD_FALLBACK=1`.
+
+Tag profiles:
+- `MAP_TAG_PROFILE=enhanced` is the default and includes extra waterways.
+- `MAP_TAG_PROFILE=igs630` is a stricter compatibility profile for iGS630 devices that crash with enhanced maps. It matches official iGPSPORT maps more closely by keeping `footway`/`path`, excluding `waterway=*`, and copying the original map's Mapsforge `created_by` header value into the generated map.
+
+Windows example:
+
+```powershell
+$env:MAP_TAG_PROFILE = "igs630"
+uv run python build_map_package.py switzerland --md5-cfg tmp\test-630\map_md5_list.cfg
+```
+
+Bash example:
+
+```bash
+MAP_TAG_PROFILE=igs630 uv run python build_map_package.py switzerland --md5-cfg tmp/test-630/map_md5_list.cfg
+```
 
 If a run was interrupted and some final maps already exist in `output/`, you can resume:
 
@@ -240,7 +272,7 @@ If a run was interrupted and some final maps already exist in `output/`, you can
 ./run.sh input --resume
 ```
 
-Resume mode skips entries when the exact expected final output already exists with the same country code, product code, source PBF date, and original tile geocode.
+Resume mode skips entries when the exact expected final output already exists and its sidecar build metadata matches the current settings. This prevents accidentally packaging an older map generated with a different `MAP_TAG_PROFILE`, iGS630 header patch state, tag config, transform file, source mode, or Mapsforge writer version. Existing maps without sidecar metadata are rebuilt once.
 
 ## What the Script Does
 
@@ -290,25 +322,36 @@ CZ03002604163DE24P00T00L.map,https://download.geofabrik.de/europe/czech-republic
 
 ```
 igpsport-map-updater/
+├── igpsport_map_updater/        # Importable Python implementation package
+│   ├── build_map_package.py
+│   ├── download_igpsport_maps.py
+│   ├── generate_maps_csv.py
+│   ├── package_maps.py
+│   ├── map_md5_cfg.py
+│   ├── patch_mapsforge_header.py
+│   ├── build_binavi_package.py
+│   └── package_binavi.py
+├── build_map_package.py         # Compatibility wrapper for the main CLI
+├── download_igpsport_maps.py    # Compatibility wrapper for official downloads
+├── generate_maps_csv.py         # Compatibility wrapper for maps.csv generation
+├── package_maps.py              # Compatibility wrapper for ZIP packaging
+├── build_binavi_package.py      # Compatibility wrapper for BiNavi packaging
 ├── run.sh                       # Full workflow - Unix/Linux/macOS
 ├── run.ps1                      # Full workflow - Windows
 ├── script.sh                    # Map generation only - Unix/Linux/macOS
 ├── script.ps1                   # Map generation only - Windows
 ├── maps.csv                     # Configuration file with map definitions
-├── tag-igpsport.xml             # Tag configuration for Mapsforge writer
-├── tag-igpsport-transform.xml   # Tag transformation rules
-├── generate_maps_csv.py         # Generate maps.csv from original map files
-├── download_igpsport_maps.py    # List/download official iGPSPORT map ZIPs
-├── build_map_package.py         # End-to-end download/generate/package helper
-├── package_maps.py              # Package generated maps with README/manifest
-├── extract_tags_map.py          # Utility to extract tags from .map files
-├── extract_tags_pbf.py          # Utility to extract tags from PBF files
+├── tag-igpsport*.xml            # Mapsforge tag profiles and transforms
+├── tag-igpsport-igs630*.xml     # iGS630 compatibility tag profiles
+├── test_*.py                    # Pytest suite
+├── specs/                       # Spec Kit feature specifications
+├── docs/                        # Project notes and backlog documents
 ├── download/                    # Downloaded OSM PBF and polygon files
 │   ├── *.osm.pbf
 │   └── *.poly
 ├── output/                      # Generated map files (final output)
 │   └── *.map
-├── backup/                      # Store original IGPSPORT maps here
+├── input/                       # Optional local original iGPSPORT maps
 ├── tmp/                         # Temporary files during processing
 ├── misc/                        # Documentation and diagrams
 │   ├── filename-structure.svg
@@ -322,9 +365,11 @@ igpsport-map-updater/
 
 ### Directory Descriptions
 
+- **igpsport_map_updater/**: Testable Python implementation package. New Python logic should live here.
+- **Root Python files**: Thin compatibility wrappers. They keep documented commands such as `uv run python build_map_package.py switzerland` working.
 - **download/**: Stores downloaded OSM PBF files and polygon boundary files. Files are cached to avoid re-downloading.
 - **output/**: Contains the final generated `.map` files with IGPSPORT-compatible filenames.
-- **backup/**: Recommended location to store your original IGPSPORT maps before replacing them.
+- **input/**: Optional location for original iGPSPORT maps when using the local-input workflow.
 - **tmp/**: Temporary directory used by Osmosis during processing (can be deleted after completion).
 - **misc/**: Contains SVG diagrams explaining the filename structure and tile grid concepts.
 - **osmosis-0.49.2/**: Automatically downloaded and extracted Osmosis tool with Mapsforge plugin.
@@ -422,12 +467,12 @@ Examples:
 
 ```powershell
 $env:MAP_WRITER_THREADS = "1"
-$env:JAVA_XMX = "20g"
+$env:JAVA_XMX = "24g"
 .\script.ps1
 ```
 
 ```bash
-MAP_WRITER_THREADS=1 JAVA_XMX=20g ./script.sh
+MAP_WRITER_THREADS=1 JAVA_XMX=24g ./script.sh
 ```
 
 To opt back into automatic HD retry:
@@ -471,6 +516,8 @@ The script filters OSM data to include:
 - **Waterways**: rivers, streams, canals, dams, drains
 - **Natural features**: water bodies, coastlines
 
+Set `MAP_TAG_PROFILE=igs630` to disable waterways and apply the iGS630 Mapsforge header compatibility patch for older iGS630 devices.
+
 All other features (buildings, POIs, amenities, etc.) are filtered out to reduce file size and focus on navigation.
 
 ## Utilities
@@ -479,16 +526,16 @@ All utilities use only the Python standard library unless noted otherwise.
 
 ### CSV Generator (generate_maps_csv.py)
 
-Automatically generates `maps.csv` from your original iGPSport map files. This is the recommended first step — see [Quick Start](#quick-start).
+Automatically generates `maps.csv` from original iGPSport map files. The one-command package builder runs this for you; use this utility directly when you want to review or edit `maps.csv` before generating maps.
 
 iGPSport map filenames encode the country, region, and geographic bounding box in a specific format. This script decodes that information and matches each region against the [Geofabrik region index](https://download.geofabrik.de/) (512 regions worldwide) to find the correct PBF and polygon download URLs. When one tile crosses several same-country Geofabrik subregions, it can emit a small multi-region blend instead of falling back to a whole-country extract.
 
 ```bash
-# Generate maps.csv from your backup directory
-uv run python generate_maps_csv.py backup/
+# Generate maps.csv from a local input directory
+uv run python generate_maps_csv.py input/
 
 # Specify a custom output path
-uv run python generate_maps_csv.py backup/ -o my_maps.csv
+uv run python generate_maps_csv.py input/ -o my_maps.csv
 ```
 
 ### Official Map Downloader (download_igpsport_maps.py)
@@ -513,10 +560,12 @@ Packages generated maps for sharing. It matches generated output maps back to th
 ```bash
 uv run python package_maps.py input
 uv run python package_maps.py input --label switzerland
+uv run python package_maps.py input --package-prefix IGPSport-iGS630
 uv run python package_maps.py input --name my-map-pack.zip
+uv run python package_maps.py input --md5-cfg map_md5_list.cfg
 ```
 
-The ZIP contains `README.txt`, `MANIFEST.txt`, and the matching generated `.map` files. For Switzerland, the default package name is `IGPSport300-800-Switzerland.zip`.
+The ZIP contains `README.txt`, `MANIFEST.txt`, and the matching generated `.map` files. For Switzerland, the default package name is `IGPSport300-800-Switzerland.zip`; with `MAP_TAG_PROFILE=igs630`, Greece becomes `IGPSport-iGS630-Greece.zip`. Use `--md5-cfg` for older iGS630 packages when you want to include an updated `map_md5_list.cfg` based on the actual generated map checksums.
 
 ### End-to-End Packager (build_map_package.py)
 
@@ -526,12 +575,31 @@ Runs the official map downloader, full map generator, and ZIP packager as one wo
 uv run python build_map_package.py switzerland
 uv run python build_map_package.py switzerland --dry-run
 uv run python build_map_package.py switzerland --clean-work
+uv run python build_map_package.py switzerland --package-prefix IGPSport-iGS630
 uv run python build_map_package.py switzerland --name IGPSport300-800-Switzerland.zip
+uv run python build_map_package.py switzerland --md5-cfg map_md5_list.cfg
 ```
 
-Downloads are stored under `tmp/igpsport-official-<region>/input`, generated maps are written to `output/`, and the final ZIP is written to `packages/`. Rerunning the same command resumes both the official input download step and the generated map step. Use `--clean-work` when you prefer to remove the downloaded official input maps after a successful package build.
+Downloads are stored under `tmp/igpsport-official-<region>/input`, generated maps are written to `output/`, and the final ZIP is written to `packages/`. Rerunning the same command resumes both the official input download step and the generated map step, but generated maps are only skipped when their build metadata matches the current settings. Use `--clean-work` when you prefer to remove the downloaded official input maps after a successful package build.
 
 If you do not know the exact region name, run `uv run python download_igpsport_maps.py --countries` or `uv run python download_igpsport_maps.py --search <term>` first.
+
+### Experimental BiNavi Packager
+
+BiNavi packages have a different structure from BSC300/iGS630 packages. They contain `Maps/` plus `Router/`, and some map files do not use the standard iGPSPORT tile filename format.
+
+Use an official extracted BiNavi package as the template:
+
+```bash
+uv run python build_binavi_package.py tmp/test-binavi/IT00 --dry-run
+uv run python build_binavi_package.py tmp/test-binavi/IT00
+```
+
+This runs the normal generator only for the one parseable main map in `Maps/`, then creates an experimental ZIP such as `IGPSport-BiNavi-Italy-Experimental.zip`. The package keeps official `Router/*.rtd`, contour maps, and overview maps unchanged, and replaces only the generated main country map.
+
+Contour/elevation and routing files are not regenerated. Building those would require a separate DEM/contour and routing-data pipeline, which is not implemented here.
+
+See [docs/binavi-backlog.md](docs/binavi-backlog.md) for the experimental BiNavi backlog, including DEM/contour maps, router files, and richer BiNavi tag mapping.
 
 ### Map Tag Extractor (extract_tags_map.py)
 
@@ -541,6 +609,15 @@ Inspects the generated `.map` files to show which OSM tags they contain. Useful 
 uv run python extract_tags_map.py output/map.map            # single file
 uv run python extract_tags_map.py backup/                    # all files in folder
 uv run python extract_tags_map.py backup/ tags_output/       # with output folder
+```
+
+### Mapsforge Semantic Comparison (compare_mapsforge_maps.py)
+
+Compares two generated `.map` files for baseline-vs-optimized equivalence. This is intended for checks such as normal generation vs future Osmium preclip generation. It does not require byte-for-byte equality; creation time, file size, `created_by`, and subfile byte offsets may differ, but visible Mapsforge semantics such as bbox, projection, tile size, zoom intervals, and tag dictionaries must match.
+
+```bash
+uv run python compare_mapsforge_maps.py output-baseline/CH010026060335Y1F00M0V4.map output-preclip/CH010026060335Y1F00M0V4.map
+uv run python compare_mapsforge_maps.py --json output-baseline/map.map output-preclip/map.map
 ```
 
 ### PBF Tag Extractor (extract_tags_pbf.py)
