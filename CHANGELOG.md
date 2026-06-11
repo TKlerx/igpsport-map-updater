@@ -25,6 +25,7 @@ This changelog documents notable changes made in this fork after diverging from 
 - Added automated tests for the CSV generator in `test_generate_maps_csv.py`.
 - Added Python cache and pytest cache ignore rules to `.gitignore`.
 - Added option 3 / multi-region source blending for tiles that span several same-country Geofabrik subregions.
+- Added an `osmium extract` pre-clip step before the osmosis pipeline that trims each source PBF to the tile bbox, caching the result under `download/{source}-{TILE_GEOCODE}.osm.pbf`. ~10× speedup on a 8 GB / 10-core WSL host for the IT17 tile (about 13 min vs ~3 h). Falls back to the full PBF if `osmium-tool` is not installed.
 
 ### Changed
 - Made the end-to-end package workflow resumable for already downloaded official input maps.
