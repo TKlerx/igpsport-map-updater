@@ -75,6 +75,21 @@ THREADS="${MAP_WRITER_THREADS:-}"
 MAP_WRITER_TYPE="${MAP_WRITER_TYPE:-auto}"
 MAP_ALLOW_HD_FALLBACK="${MAP_ALLOW_HD_FALLBACK:-}"
 RESUME_MODE="${MAP_RESUME:-}"
+MAP_PRECLIP_MODE="${MAP_PRECLIP_MODE:-disabled}"
+MAP_PRECLIP_MODE="$(echo "$MAP_PRECLIP_MODE" | tr '[:upper:]' '[:lower:]')"
+case "$MAP_PRECLIP_MODE" in
+    off|false|0) MAP_PRECLIP_MODE="disabled" ;;
+esac
+case "$MAP_PRECLIP_MODE" in
+    disabled|auto|required) ;;
+    *)
+        echo "ERROR: Unsupported MAP_PRECLIP_MODE '$MAP_PRECLIP_MODE'. Use 'disabled', 'auto', or 'required'." >&2
+        exit 1
+        ;;
+esac
+MAP_PRECLIP_STRATEGY="${MAP_PRECLIP_STRATEGY:-smart}"
+PRECLIP_VERSION="1"
+PRECLIP_CACHE_DIR="${MAP_PRECLIP_CACHE_DIR:-$SCRIPT_DIR/tmp/osmium-preclip}"
 TMP_DIR="${JAVA_TMP_DIR:-$SCRIPT_DIR/tmp}"
 JAVA_XMS="${JAVA_XMS:-}"
 JAVA_XMX="${JAVA_XMX:-}"
@@ -115,7 +130,7 @@ while IFS=',' read -r original_name pbf_url poly_url; do
     if [ -z "$original_name" ]; then
         continue
     fi
-    
+
     echo ""
     echo "Processing entry: $original_name"
 
@@ -369,6 +384,22 @@ find_existing_output_map() {
         return 0
     fi
 
+    local metadata_path
+    for metadata_path in "$output_dir"/*.map.build.json; do
+        [ -f "$metadata_path" ] || continue
+        metadata_value_matches "$metadata_path" "CountryCode" "$country_code" || continue
+        metadata_value_matches "$metadata_path" "ProductCode" "$product_code" || continue
+        metadata_value_matches "$metadata_path" "SourceDate" "$date_string" || continue
+        if metadata_value_matches "$metadata_path" "OriginalTileGeocode" "$geocode" ||
+           metadata_value_matches "$metadata_path" "TileGeocode" "$geocode"; then
+            local map_path="${metadata_path%.build.json}"
+            if [ -f "$map_path" ]; then
+                echo "$map_path"
+                return 0
+            fi
+        fi
+    done
+
     return 1
 }
 
@@ -414,6 +445,9 @@ build_profile_matches() {
     metadata_value_matches "$metadata_path" "SourceMode" "$source_mode" &&
     metadata_value_matches "$metadata_path" "PbfFiles" "$build_pbf_files" &&
     metadata_value_matches "$metadata_path" "MapTagProfile" "$MAP_TAG_PROFILE" &&
+    metadata_value_matches "$metadata_path" "PreclipMode" "$MAP_PRECLIP_MODE" &&
+    metadata_value_matches "$metadata_path" "PreclipStatus" "$preclip_status" &&
+    metadata_value_matches "$metadata_path" "PreclipStrategy" "$MAP_PRECLIP_STRATEGY" &&
     metadata_value_matches "$metadata_path" "Igs630HeaderPatch" "$igs630_header_patch" &&
     metadata_value_matches "$metadata_path" "TagConfFile" "$(basename "$TAG_CONF_FILE")" &&
     metadata_value_matches "$metadata_path" "TagTransformFile" "$(basename "$TAG_TRANSFORM_FILE")" &&
@@ -434,9 +468,14 @@ write_build_profile() {
   "ProductCode": "$PRODUCT_CODE",
   "SourceDate": "$date_string",
   "TileGeocode": "$TILE_GEOCODE",
+  "OriginalTileGeocode": "$TILE_GEOCODE",
+  "GeneratedDataGeocode": "$generated_data_geocode",
   "SourceMode": "$source_mode",
   "PbfFiles": "$build_pbf_files",
   "MapTagProfile": "$MAP_TAG_PROFILE",
+  "PreclipMode": "$MAP_PRECLIP_MODE",
+  "PreclipStatus": "$preclip_status",
+  "PreclipStrategy": "$MAP_PRECLIP_STRATEGY",
   "Igs630HeaderPatch": "$igs630_header_patch",
   "TagConfFile": "$(basename "$TAG_CONF_FILE")",
   "TagTransformFile": "$(basename "$TAG_TRANSFORM_FILE")",
@@ -623,6 +662,9 @@ get_auto_map_writer_config() {
     IFS='|' read -r preferred_writer preferred_threads preferred_java_xms preferred_java_xmx <<< "$preferred"
 
     requested_heap_bytes=$(heap_string_to_bytes "$preferred_java_xmx")
+    if [ "$(heap_string_to_bytes "$preferred_java_xms")" -gt "$requested_heap_bytes" ]; then
+        preferred_java_xms="$preferred_java_xmx"
+    fi
 
     if [ "$max_auto_heap_bytes" -lt "$min_ram_heap_bytes" ]; then
         echo "ram|1|$max_auto_heap_string|$max_auto_heap_string|ram_limited_by_total_ram"
@@ -640,11 +682,169 @@ get_auto_map_writer_config() {
         return
     fi
 
-    echo "${preferred}|preferred_ram"
+    echo "$preferred_writer|$preferred_threads|$preferred_java_xms|$preferred_java_xmx|preferred_ram"
 }
 
 get_hd_config() {
     echo "hd|1|2g|8g"
+}
+
+sha256_file() {
+    local path="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$path" | awk '{print $1}'
+        return
+    fi
+    shasum -a 256 "$path" | awk '{print $1}'
+}
+
+sha256_text() {
+    local value="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$value" | sha256sum | awk '{print $1}'
+        return
+    fi
+    printf '%s' "$value" | shasum -a 256 | awk '{print $1}'
+}
+
+file_mtime_ns() {
+    local path="$1"
+    stat -c '%Y000000000' "$path" 2>/dev/null || stat -f '%m000000000' "$path"
+}
+
+preclip_metadata_value_matches() {
+    local metadata_path="$1"
+    local key="$2"
+    local value="$3"
+    grep -F "\"$key\": \"$value\"" "$metadata_path" >/dev/null 2>&1
+}
+
+preclip_cache_paths() {
+    local source_pbf="$1"
+    local source_base
+    local source_size
+    local source_mtime
+    local source_hash
+    local bbox
+    local key_material
+    local key
+    local safe_source
+
+    source_base=$(basename "$source_pbf")
+    source_size=$(wc -c < "$source_pbf" | tr -d ' ')
+    source_mtime=$(file_mtime_ns "$source_pbf")
+    source_hash=$(sha256_file "$source_pbf")
+    bbox="$TILE_MIN_LON,$TILE_MIN_LAT,$TILE_MAX_LON,$TILE_MAX_LAT"
+    key_material="$PRECLIP_VERSION|$source_base|$source_size|$source_mtime|$source_hash|$TILE_GEOCODE|$bbox|$MAP_PRECLIP_STRATEGY"
+    key=$(sha256_text "$key_material" | cut -c1-24)
+    safe_source=$(echo "$source_base" | sed 's/[^A-Za-z0-9_.-]/_/g')
+
+    PRECLIP_SOURCE_BASE="$source_base"
+    PRECLIP_SOURCE_SIZE="$source_size"
+    PRECLIP_SOURCE_MTIME="$source_mtime"
+    PRECLIP_SOURCE_HASH="$source_hash"
+    PRECLIP_BBOX="$bbox"
+    PRECLIP_CACHE_FILE="$PRECLIP_CACHE_DIR/${safe_source}.${TILE_GEOCODE}.${key}.osm.pbf"
+    PRECLIP_METADATA_FILE="$PRECLIP_CACHE_FILE.json"
+}
+
+preclip_cache_valid() {
+    local metadata_path="$1"
+    [ -f "$PRECLIP_CACHE_FILE" ] &&
+    [ -f "$metadata_path" ] &&
+    preclip_metadata_value_matches "$metadata_path" "FormatVersion" "1" &&
+    preclip_metadata_value_matches "$metadata_path" "PreclipVersion" "$PRECLIP_VERSION" &&
+    preclip_metadata_value_matches "$metadata_path" "Strategy" "$MAP_PRECLIP_STRATEGY" &&
+    preclip_metadata_value_matches "$metadata_path" "SourceName" "$PRECLIP_SOURCE_BASE" &&
+    preclip_metadata_value_matches "$metadata_path" "SourceSize" "$PRECLIP_SOURCE_SIZE" &&
+    preclip_metadata_value_matches "$metadata_path" "SourceMtimeNs" "$PRECLIP_SOURCE_MTIME" &&
+    preclip_metadata_value_matches "$metadata_path" "SourceSha256" "$PRECLIP_SOURCE_HASH" &&
+    preclip_metadata_value_matches "$metadata_path" "TileGeocode" "$TILE_GEOCODE" &&
+    preclip_metadata_value_matches "$metadata_path" "BBox" "$PRECLIP_BBOX"
+}
+
+write_preclip_metadata() {
+    local metadata_path="$1"
+    cat > "$metadata_path" <<EOF
+{
+  "FormatVersion": "1",
+  "PreclipVersion": "$PRECLIP_VERSION",
+  "Strategy": "$MAP_PRECLIP_STRATEGY",
+  "SourceName": "$PRECLIP_SOURCE_BASE",
+  "SourceSize": "$PRECLIP_SOURCE_SIZE",
+  "SourceMtimeNs": "$PRECLIP_SOURCE_MTIME",
+  "SourceSha256": "$PRECLIP_SOURCE_HASH",
+  "TileGeocode": "$TILE_GEOCODE",
+  "BBox": "$PRECLIP_BBOX",
+  "OsmiumVersion": "$(osmium --version 2>/dev/null | head -n 1)"
+}
+EOF
+}
+
+apply_preclip_to_inputs() {
+    preclip_status="disabled"
+
+    if [ "$MAP_PRECLIP_MODE" = "disabled" ]; then
+        return 0
+    fi
+
+    if ! command -v osmium >/dev/null 2>&1; then
+        if [ "$MAP_PRECLIP_MODE" = "required" ]; then
+            echo "ERROR: MAP_PRECLIP_MODE=required but osmium is not available." >&2
+            return 1
+        fi
+        echo "Osmium preclip skipped: osmium is not available."
+        preclip_status="skipped-missing-osmium"
+        return 0
+    fi
+
+    mkdir -p "$PRECLIP_CACHE_DIR"
+    local clipped_inputs=()
+    local source_pbf
+    local tmp_cache
+    local run_status
+
+    for source_pbf in "${INPUT_FILES[@]}"; do
+        preclip_cache_paths "$source_pbf"
+
+        if preclip_cache_valid "$PRECLIP_METADATA_FILE"; then
+            echo "Osmium preclip cache hit: $(basename "$PRECLIP_CACHE_FILE")"
+            clipped_inputs+=("$PRECLIP_CACHE_FILE")
+            continue
+        fi
+
+        echo "Osmium preclip cache miss: $(basename "$source_pbf") -> $(basename "$PRECLIP_CACHE_FILE")"
+        tmp_cache="$PRECLIP_CACHE_FILE.tmp"
+        rm -f "$tmp_cache"
+        set +e
+        osmium extract \
+            -b "$PRECLIP_BBOX" \
+            -s "$MAP_PRECLIP_STRATEGY" \
+            -f pbf \
+            --overwrite \
+            -o "$tmp_cache" \
+            "$source_pbf"
+        run_status=$?
+        set -e
+
+        if [ "$run_status" -ne 0 ]; then
+            rm -f "$tmp_cache"
+            if [ "$MAP_PRECLIP_MODE" = "required" ]; then
+                echo "ERROR: Osmium preclip failed for $source_pbf." >&2
+                return "$run_status"
+            fi
+            echo "WARNING: Osmium preclip failed for $source_pbf; using original PBF."
+            preclip_status="fallback-preclip-failed"
+            return 0
+        fi
+
+        mv "$tmp_cache" "$PRECLIP_CACHE_FILE"
+        write_preclip_metadata "$PRECLIP_METADATA_FILE"
+        clipped_inputs+=("$PRECLIP_CACHE_FILE")
+    done
+
+    INPUT_FILES=("${clipped_inputs[@]}")
+    preclip_status="used"
 }
 
 run_osmosis_map_writer() {
@@ -660,7 +860,7 @@ run_osmosis_map_writer() {
     for source_index in "${!INPUT_FILES[@]}"; do
         cmd+=(
             --read-pbf-fast "file=${INPUT_FILES[$source_index]}"
-            --bounding-polygon "file=${POLY_FILES[$source_index]}"
+            --bounding-polygon "file=${INPUT_POLY_FILES[$source_index]}"
             --tag-transform "file=$TAG_TRANSFORM_FILE"
         )
 
@@ -693,15 +893,39 @@ failure_count=0
 for i in "${!PBF_FILES[@]}"; do
     file_index=$((file_index + 1))
     IFS=';' read -r -a INPUT_FILES <<< "${PBF_FILES[$i]}"
-    IFS=';' read -r -a POLY_FILES <<< "${POLY_FILES[$i]}"
+    IFS=';' read -r -a INPUT_POLY_FILES <<< "${POLY_FILES[$i]}"
     ORIGINAL_NAME="${ORIGINAL_NAMES[$i]}"
     if [ "${#INPUT_FILES[@]}" -eq 1 ]; then
         file_name=$(basename "${INPUT_FILES[0]}")
-        poly_name=$(basename "${POLY_FILES[0]}")
+        poly_name=$(basename "${INPUT_POLY_FILES[0]}")
     else
         file_name="${#INPUT_FILES[@]} merged sources"
-        poly_name="${#POLY_FILES[@]} matching polygons"
+        poly_name="${#INPUT_POLY_FILES[@]} matching polygons"
     fi
+
+    # Extract country code from original filename (first 2 characters)
+    COUNTRY_CODE="${ORIGINAL_NAME:0:2}"
+
+    # Extract product code from original filename (characters 2-5, 0-indexed)
+    PRODUCT_CODE="${ORIGINAL_NAME:2:4}"
+    get_original_tile_bbox "$ORIGINAL_NAME"
+    if [ "${#INPUT_FILES[@]}" -eq 1 ]; then
+        source_mode="single-region"
+    else
+        source_mode="multi-region blend (${#INPUT_FILES[@]} sources)"
+    fi
+    build_pbf_files=$(join_input_basenames "${INPUT_FILES[@]}")
+    case "$MAP_TAG_PROFILE" in
+        igs630|strict|compat) igs630_header_patch="created_by_from_original" ;;
+        *) igs630_header_patch="off" ;;
+    esac
+
+    # Extract date from PBF file before processing
+    echo "Extracting date from PBF file..."
+    date_string=$(extract_combined_pbf_date "${INPUT_FILES[@]}")
+
+    apply_preclip_to_inputs
+
     pbf_size_bytes=0
     for pbf_file in "${INPUT_FILES[@]}"; do
         file_size=$(wc -c < "$pbf_file" | tr -d ' ')
@@ -726,27 +950,7 @@ for i in "${!PBF_FILES[@]}"; do
     effective_threads="${THREADS:-$base_threads}"
     effective_java_xms="${JAVA_XMS:-$base_java_xms}"
     effective_java_xmx="${JAVA_XMX:-$base_java_xmx}"
-    
-    # Extract country code from original filename (first 2 characters)
-    COUNTRY_CODE="${ORIGINAL_NAME:0:2}"
-    
-    # Extract product code from original filename (characters 2-5, 0-indexed)
-    PRODUCT_CODE="${ORIGINAL_NAME:2:4}"
-    get_original_tile_bbox "$ORIGINAL_NAME"
-    if [ "${#INPUT_FILES[@]}" -eq 1 ]; then
-        source_mode="single-region"
-    else
-        source_mode="multi-region blend (${#INPUT_FILES[@]} sources)"
-    fi
-    build_pbf_files=$(join_input_basenames "${INPUT_FILES[@]}")
-    case "$MAP_TAG_PROFILE" in
-        igs630|strict|compat) igs630_header_patch="created_by_from_original" ;;
-        *) igs630_header_patch="off" ;;
-    esac
-    
-    # Extract date from PBF file before processing
-    echo "Extracting date from PBF file..."
-    date_string=$(extract_combined_pbf_date "${INPUT_FILES[@]}")
+
     existing_output=""
     if [ -n "$RESUME_MODE" ]; then
         existing_output=$(find_existing_output_map "$OUTPUT_DIR" "$COUNTRY_CODE" "$PRODUCT_CODE" "$date_string" "$TILE_GEOCODE" || true)
@@ -764,6 +968,7 @@ for i in "${!PBF_FILES[@]}"; do
     echo "  Tile BBox:     minLat=$TILE_MIN_LAT minLng=$TILE_MIN_LON maxLat=$TILE_MAX_LAT maxLng=$TILE_MAX_LON"
     echo "  PBF Date:      $date_string"
     echo "  PBF Size:      ${pbf_size_mb} MB"
+    echo "  Preclip Mode:  $MAP_PRECLIP_MODE ($preclip_status)"
     echo "  Total RAM:     ${total_physical_gb} GB"
     echo "  Writer Type:   $requested_writer_type"
     echo "  Threads:       $effective_threads"
@@ -880,7 +1085,8 @@ for i in "${!PBF_FILES[@]}"; do
         max_lng=$(echo "scale=6; $max_lng_micro / 1000000.0" | bc)
         
         actual_geo_name=$(get_geo_name "$min_lng" "$max_lng" "$min_lat" "$max_lat")
-        geo_name="$TILE_GEOCODE"
+        geo_name="$actual_geo_name"
+        generated_data_geocode="$actual_geo_name"
         
         new_name="${COUNTRY_CODE}${PRODUCT_CODE}${date_string}${geo_name}"
         new_path="$OUTPUT_DIR/$new_name.map"
@@ -889,8 +1095,8 @@ for i in "${!PBF_FILES[@]}"; do
         echo "  Date (from PBF): $date_string"
         echo "  Bounding Box: minLat=$min_lat minLng=$min_lng maxLat=$max_lat maxLng=$max_lng"
         echo "  Geo Code:    $geo_name"
-        if [ "$actual_geo_name" != "$geo_name" ]; then
-            echo "  Data Geo:    $actual_geo_name"
+        if [ "$actual_geo_name" != "$TILE_GEOCODE" ]; then
+            echo "  Original Geo: $TILE_GEOCODE"
         fi
         echo "  Generated:   $new_name.map"
         

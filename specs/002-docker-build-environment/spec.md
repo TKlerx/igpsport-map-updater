@@ -8,6 +8,15 @@
 
 **Input**: User description: "Dockerize the workflow so Windows users can run the same environment with osmium-tool without installing conda or native GIS tooling."
 
+## Clarifications
+
+### Session 2026-06-04
+
+- Q: Base image distro for the build environment? → A: Debian-based slim, specifically `trixie` (Debian 13)
+- Q: How should the container handle host file ownership of mounted artifacts? → A: Run as non-root user with UID/GID injected (build-arg/runtime) to match the host owner
+- Q: How is `osmium-tool` installed and version-controlled in the image? → A: Install via apt from Debian trixie repos; record/pin the observed version for feature 003 equivalence tests
+- Q: What scope should CI cover for the Docker image? → A: Build the image, run tool version checks plus `pytest`/dry-run workflow; no full end-to-end map build in routine CI
+
 ## User Scenarios & Testing
 
 ### User Story 1 - Run A Reproducible Build On Windows (Priority: P1)
@@ -57,17 +66,18 @@ A Docker build writes outputs back to the host in the same expected directories 
 
 - Docker Desktop path sharing may be disabled on Windows.
 - Large PBF and map files can exceed available disk space.
-- Host file ownership/permissions can differ between Windows, WSL, and Linux.
+- Host file ownership/permissions can differ between Windows, WSL, and Linux; resolved via non-root UID/GID matching (see FR-004a).
 - Docker builds should not require committing local `input/`, `download/`, `output/`, or `packages/`.
 
 ## Requirements
 
 ### Functional Requirements
 
-- **FR-001**: The project MUST provide a Dockerfile or equivalent container build definition for the map generation workflow.
-- **FR-002**: The image MUST include Python/uv, Java suitable for Osmosis/Mapsforge, and `osmium-tool`.
+- **FR-001**: The project MUST provide a Dockerfile or equivalent container build definition for the map generation workflow, based on a Debian `trixie` (Debian 13) slim image.
+- **FR-002**: The image MUST include Python/uv, Java suitable for Osmosis/Mapsforge, and `osmium-tool`. `osmium-tool` MUST be installed via apt from the Debian trixie repositories, and the resulting version MUST be recorded/pinned in documentation so feature 003 (osmium-preclip-equivalence) tests reference a known version.
 - **FR-003**: The README MUST document Docker build and run commands for at least one country package workflow.
 - **FR-004**: The Docker workflow MUST mount host directories so `download/`, `tmp/`, `output/`, and `packages/` persist across runs.
+- **FR-004a**: The container MUST run as a non-root user whose UID/GID can be matched to the host owner (via build-arg or runtime override) so artifacts written to mounted directories on Linux/WSL are host-owned, not root-owned.
 - **FR-005**: The Docker workflow MUST support the same tag profile environment variables as native workflows.
 - **FR-006**: The Docker workflow MUST not require conda.
 - **FR-007**: Native Windows/PowerShell workflows MUST remain documented as fallback paths.
@@ -85,10 +95,11 @@ A Docker build writes outputs back to the host in the same expected directories 
 - **SC-001**: Docker image builds successfully from a clean checkout.
 - **SC-002**: `osmium --version` succeeds inside the image.
 - **SC-003**: A documented Docker command can run `uv run pytest` inside the image.
-- **SC-004**: A documented Docker command can run a dry-run package workflow without host-native Java or Osmium.
+- **SC-004**: A documented Docker command runs a dry-run package workflow without host-native Java or Osmium, defined as: tool version checks (`java -version`, `uv --version`, `osmium --version`) + `uv run pytest -q` + `generate_maps_csv.py` over a tiny fixture input, producing no full country map.
+- **SC-005**: Routine CI builds the image, runs tool version checks (`java -version`, `uv --version`, `osmium --version`) and `uv run pytest` plus a dry-run workflow; full end-to-end map builds are excluded from routine CI and remain a manual/release verification step.
 
 ## Assumptions
 
 - Docker Desktop or compatible Docker runtime is acceptable for Windows users who want the optimized path.
-- Full map builds may be too large for routine CI, so CI may validate image/tool availability and dry-run behavior first.
+- Full map builds may be too large for routine CI, so CI validates image build, tool availability, and dry-run behavior only (see SC-005).
 - End-to-end real map generation remains a manual or release verification step unless a small fixture is introduced.

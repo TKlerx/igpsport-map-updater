@@ -3,8 +3,9 @@
 Package generated iGPSPORT map files with sharing README and manifest.
 
 The packager matches generated output files back to the original input files by
-country code, product code, and geocode. The date may differ because generated
-maps use the source OpenStreetMap date.
+country/product/geocode when possible, or by generator sidecar metadata when the
+generated map's data-derived geocode differs from the original vendor geocode.
+The date may differ because generated maps use the source OpenStreetMap date.
 
 Usage:
     python package_maps.py input
@@ -13,6 +14,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -53,10 +55,14 @@ COUNTRY_LABELS = {
 }
 
 
+def _as_path(path):
+    return path if isinstance(path, Path) else Path(path)
+
+
 def parsed_map_files(directory):
     """Return parsed iGPSPORT .map files from a directory."""
     result = []
-    for path in sorted(Path(directory).glob("*.map")):
+    for path in sorted(_as_path(directory).glob("*.map")):
         parsed = parse_filename(path.name)
         if parsed:
             parsed["path"] = path
@@ -69,6 +75,40 @@ def map_key(parsed):
     return parsed["country_code"], parsed["product_code"], parsed["geocode"]
 
 
+def build_metadata_path(map_path):
+    """Return the generator sidecar path for a map file."""
+    map_path = _as_path(map_path)
+    return map_path.with_name(f"{map_path.name}.build.json")
+
+
+def read_build_metadata(map_path):
+    """Read optional generator sidecar metadata for a generated map."""
+    metadata_path = build_metadata_path(map_path)
+    if not metadata_path.is_file():
+        return None
+
+    try:
+        return json.loads(metadata_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
+def metadata_matches_input(metadata, input_map):
+    """Return True when sidecar metadata ties an output map to an input map."""
+    if not metadata:
+        return False
+
+    if metadata.get("OriginalName") == input_map["filename"]:
+        return True
+
+    metadata_geocode = metadata.get("OriginalTileGeocode") or metadata.get("TileGeocode")
+    return (
+        metadata.get("CountryCode") == input_map["country_code"]
+        and metadata.get("ProductCode") == input_map["product_code"]
+        and metadata_geocode == input_map["geocode"]
+    )
+
+
 def find_matching_outputs(input_maps, output_dir):
     """Find generated output maps matching the original input tile identities."""
     wanted = {map_key(parsed) for parsed in input_maps}
@@ -77,8 +117,17 @@ def find_matching_outputs(input_maps, output_dir):
     for parsed in parsed_map_files(output_dir):
         if map_key(parsed) in wanted:
             matches.append(parsed)
+            continue
 
-    return matches
+        metadata = read_build_metadata(parsed["path"])
+        if any(metadata_matches_input(metadata, input_map) for input_map in input_maps):
+            matches.append(parsed)
+
+    unique = {}
+    for parsed in matches:
+        unique[parsed["path"]] = parsed
+
+    return list(unique.values())
 
 
 def country_label(country_codes):

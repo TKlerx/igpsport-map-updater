@@ -493,6 +493,31 @@ function Find-ExistingOutputMap {
         return $expectedPath
     }
 
+    foreach ($metadataPath in Get-ChildItem -Path $outputDir -Filter "*.map.build.json" -ErrorAction SilentlyContinue) {
+        try {
+            $profile = Get-Content $metadataPath.FullName -Raw | ConvertFrom-Json
+            $profileGeocode = if ($profile.PSObject.Properties.Name -contains "OriginalTileGeocode") {
+                [string]$profile.OriginalTileGeocode
+            } else {
+                [string]$profile.TileGeocode
+            }
+            if (
+                [string]$profile.CountryCode -eq $countryCode -and
+                [string]$profile.ProductCode -eq $productCode -and
+                [string]$profile.SourceDate -eq $dateString -and
+                $profileGeocode -eq $geocode
+            ) {
+                $mapPath = $metadataPath.FullName -replace '\.build\.json$', ''
+                if (Test-Path $mapPath) {
+                    return $mapPath
+                }
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
     return $null
 }
 
@@ -523,6 +548,7 @@ function New-BuildProfile {
         ProductCode = $productCode
         SourceDate = $dateString
         TileGeocode = $geocode
+        OriginalTileGeocode = $geocode
         SourceMode = $sourceMode
         PbfFiles = (($inputFiles | ForEach-Object { Split-Path $_ -Leaf }) -join ";")
         MapTagProfile = $tagProfile
@@ -983,7 +1009,8 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
         $max_lng = $max_lng_micro / 1000000.0
         
         $actual_geo_name = Get-GeoName $min_lng $max_lng $min_lat $max_lat
-        $geo_name = $TILE_BBOX.Geocode
+        $geo_name = $actual_geo_name
+        $buildProfile["GeneratedDataGeocode"] = $actual_geo_name
         
         $new_name = "${COUNTRY_CODE}${PRODUCT_CODE}${date_string}${geo_name}"
         $new_path = Join-Path $OUTPUT_DIR "$new_name.map"
@@ -992,8 +1019,8 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
         Write-Host "  Date (from PBF): $date_string"
         Write-Host "  Bounding Box: minLat=$min_lat minLng=$min_lng maxLat=$max_lat maxLng=$max_lng"
         Write-Host "  Geo Code:    $geo_name"
-        if ($actual_geo_name -ne $geo_name) {
-            Write-Host "  Data Geo:    $actual_geo_name"
+        if ($actual_geo_name -ne $TILE_BBOX.Geocode) {
+            Write-Host "  Original Geo: $($TILE_BBOX.Geocode)"
         }
         Write-Host "  Generated:   $new_name.map"
         
@@ -1004,7 +1031,7 @@ for ($i = 0; $i -lt $MAP_ENTRIES.Count; $i++) {
             Remove-Item $new_path -Force
         }
         
-        $originalMapPath = Join-Path $INPUT_DIR $ORIGINAL_NAME
+        $originalMapPath = if ([string]::IsNullOrWhiteSpace($INPUT_DIR)) { "" } else { Join-Path $INPUT_DIR $ORIGINAL_NAME }
         Repair-Igs630MapHeader -originalMap $originalMapPath -generatedMap $OUTPUT_FILE
         Move-Item $OUTPUT_FILE $new_path
         Write-BuildProfile -mapPath $new_path -profile $buildProfile

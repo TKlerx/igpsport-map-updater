@@ -13,12 +13,12 @@
 
 ## Phase 2: Real Baseline-vs-Preclip Verification
 
-- [ ] T007 Add folder-level comparison logic in `igpsport_map_updater/map_output_compare.py` that matches maps by country/product/geocode and compares each pair semantically.
-- [ ] T008 Add root CLI wrapper `compare_map_outputs.py` for comparing one baseline output directory with one preclip output directory.
-- [ ] T009 Add tests in `test_map_output_compare.py` for matching by tile identity, missing baseline/candidate maps, and semantic mismatch reporting.
+- [x] T007 Add folder-level comparison logic in `igpsport_map_updater/map_output_compare.py` that matches maps by country/product/geocode and compares each pair semantically.
+- [x] T008 Add root CLI wrapper `compare_map_outputs.py` for comparing one baseline output directory with one preclip output directory.
+- [x] T009 Add tests in `test_map_output_compare.py` for matching by tile identity, missing baseline/candidate maps, and semantic mismatch reporting.
 - [ ] T010 Run one-time Switzerland baseline-vs-preclip generation and semantic output comparison; record the result in `docs/osmium-preclip-validation.md`.
 - [ ] T011 Run one-time United Kingdom baseline-vs-preclip generation and semantic output comparison; record the result in `docs/osmium-preclip-validation.md`.
-- [ ] T012 Document in `docs/osmium-preclip-validation.md` that full Switzerland and United Kingdom comparisons are manual/release validation checks, not routine CI jobs.
+- [x] T012 Document in `docs/osmium-preclip-validation.md` that full Switzerland and United Kingdom comparisons are manual/release validation checks, not routine CI jobs.
 
 ## Phase 3: CI Boundary
 
@@ -28,12 +28,12 @@
 
 ## Phase 4: Osmium Preclip Integration
 
-- [ ] T016 Add preclip mode selection: disabled, auto, required.
-- [ ] T017 Make disabled the default preclip mode for the initial release.
-- [ ] T018 Add safe clipped-PBF cache metadata and invalidation.
-- [ ] T019 Add tests for command construction, cache hit/miss, source change, bbox change, strategy change, and fallback behavior.
-- [ ] T020 Add explicit tests that disabled mode and missing Osmium preserve the current non-preclip generation path.
-- [ ] T021 Add multi-source preclip tests proving each source PBF is clipped independently and remains paired with its matching poly file.
-- [ ] T022 Wire preclip into Docker-backed generation.
-- [ ] T023 Document Docker-provided Osmium, optional native Osmium installation, and disabled/auto/required modes in `README.md`.
-- [ ] T024 Credit PR #1 in changelog/docs when the optimization lands.
+- [x] T016 Add preclip mode selection: disabled, auto, required.
+- [x] T017 Make disabled the default preclip mode for the initial release.
+- [x] T018 Add safe clipped-PBF cache metadata and invalidation.
+- [x] T019 Add tests for command construction, cache hit/miss, source change, bbox change, strategy change, and fallback behavior.
+- [x] T020 Add explicit tests that disabled mode and missing Osmium preserve the current non-preclip generation path.
+- [x] T021 Add multi-source preclip tests proving each source PBF is clipped independently and remains paired with its matching poly file.
+- [x] T022 Wire preclip into Docker-backed generation.
+- [x] T023 Document Docker-provided Osmium, optional native Osmium installation, and disabled/auto/required modes in `README.md`.
+- [x] T024 Credit PR #1 in changelog/docs when the optimization lands.

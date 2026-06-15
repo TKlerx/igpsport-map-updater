@@ -62,8 +62,8 @@
 
 ## Identified Gaps
 
-- [ ] G001 Add CI so `uv run pytest -q` runs automatically on pull requests.
-- [ ] G002 Add semantic `.map` comparison tooling for optimized vs baseline generation paths.
+- [x] G001 Add CI so `uv run pytest -q` runs automatically on pull requests.
+- [x] G002 Add semantic `.map` comparison tooling for optimized vs baseline generation paths.
 - [ ] G003 Add stronger parity tests for `script.ps1` and `script.sh` behavior.
 - [ ] G004 Document manual device/Cruiser verification results per released package.
 - [ ] G005 Complete repository restructure so reusable Python code is no longer spread across root-level scripts.

@@ -25,6 +25,8 @@ This changelog documents notable changes made in this fork after diverging from 
 - Added automated tests for the CSV generator in `test_generate_maps_csv.py`.
 - Added Python cache and pytest cache ignore rules to `.gitignore`.
 - Added option 3 / multi-region source blending for tiles that span several same-country Geofabrik subregions.
+- Added optional Osmium preclip mode (`MAP_PRECLIP_MODE=disabled|auto|required`) based on the optimization idea from PR #1; disabled remains the default.
+- Added folder-level semantic output comparison CLI via `compare_map_outputs.py` for baseline-vs-preclip validation.
 
 ### Changed
 - Made the end-to-end package workflow resumable for already downloaded official input maps.

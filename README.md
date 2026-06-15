@@ -28,6 +28,8 @@ Use [MAP_PACKAGE_README.txt](MAP_PACKAGE_README.txt) as the README file for shar
 - **Internet connection** (for downloading OSM data and dependencies)
 - **Disk space**: Several GB depending on the size of the regions being processed
 
+Docker can provide Java, Python, Osmium, Osmosis, and Mapsforge for the Unix workflow. See [Run with Docker](#run-with-docker) for the reproducible container path.
+
 ### Platform-Specific Requirements
 
 #### Windows
@@ -48,6 +50,73 @@ uv sync --extra pbf    # also installs pyosmium (needed for extract_tags_pbf.py)
 ```
 
 Use `uv run python ...` for Python utilities when possible. This keeps the repo on the configured Python version and avoids accidentally using a different system Python.
+
+### Run with Docker
+
+Build the Debian `trixie-slim` image:
+
+```bash
+docker build --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" -t igpsport-map-updater .
+```
+
+Windows PowerShell:
+
+```powershell
+docker build -t igpsport-map-updater .
+```
+
+Verify bundled tooling:
+
+```bash
+docker run --rm igpsport-map-updater bash -lc 'java -version && uv --version && osmium --version'
+```
+
+Run tests inside the image:
+
+```bash
+docker run --rm igpsport-map-updater uv run pytest -q
+```
+
+Run the local-input package workflow with host directories mounted:
+
+```bash
+mkdir -p input download tmp output packages
+
+docker run --rm \
+  -e MAP_TAG_PROFILE=enhanced \
+  -e MAP_RESUME=1 \
+  -v "$PWD/input:/work/input" \
+  -v "$PWD/download:/work/download" \
+  -v "$PWD/tmp:/work/tmp" \
+  -v "$PWD/output:/work/output" \
+  -v "$PWD/packages:/work/packages" \
+  --user "$(id -u):$(id -g)" \
+  igpsport-map-updater ./run.sh input --resume
+```
+
+The wrapper keeps the same mount and UID/GID behavior:
+
+```bash
+./docker-run.sh input --resume
+```
+
+Windows Docker Desktop users can use:
+
+```powershell
+.\docker-run.ps1 input -Resume
+```
+
+Generated files appear on the host in `output/` and `packages/`; Linux/WSL users should keep the `--user "$(id -u):$(id -g)"` mapping so files stay host-owned. Docker Desktop must have access to the repository path for bind mounts. More details, environment variables, and recorded tool versions are in [docs/docker.md](docs/docker.md).
+
+Native fallback remains supported when Docker is unavailable:
+
+```powershell
+.\run.ps1 input -Resume
+```
+
+```bash
+./run.sh input --resume
+```
 
 ## Important Notes
 
@@ -244,6 +313,26 @@ By default, the generator now uses an adaptive Mapsforge configuration:
 - It uses the capped heap even for small extracts, because OSM density can matter more than PBF file size.
 
 You can still override this manually with `MAP_WRITER_TYPE`, `MAP_WRITER_THREADS`, `JAVA_XMS`, `JAVA_XMX`, `JAVA_TMP_DIR`, and `MAP_TAG_PROFILE`. If you want the old slow-but-stubborn HD retry behavior, set `MAP_ALLOW_HD_FALLBACK=1`.
+
+Osmium preclip is available as an experimental memory-reduction path. It is disabled by default:
+
+- `MAP_PRECLIP_MODE=disabled` keeps the current non-preclip path.
+- `MAP_PRECLIP_MODE=auto` uses `osmium extract` when Osmium is available and falls back to the original PBF when it is not.
+- `MAP_PRECLIP_MODE=required` fails if Osmium is missing or preclip fails.
+
+Docker includes Osmium, so Windows users should prefer Docker for preclip test runs:
+
+```bash
+MAP_PRECLIP_MODE=auto ./docker-run.sh input --resume
+```
+
+Native Linux/WSL/macOS users can also install `osmium-tool` and run:
+
+```bash
+MAP_PRECLIP_MODE=auto ./run.sh input --resume
+```
+
+Preclip caches clipped PBFs under `tmp/osmium-preclip/` and invalidates them when source file identity, tile bbox, strategy, or preclip implementation version changes. Full Switzerland and United Kingdom baseline-vs-preclip semantic comparisons are release validation checks; routine CI only runs fixture tests and the Docker dry-run.
 
 Tag profiles:
 - `MAP_TAG_PROFILE=enhanced` is the default and includes extra waterways.

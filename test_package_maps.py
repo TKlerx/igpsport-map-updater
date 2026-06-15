@@ -34,6 +34,32 @@ def test_find_matching_outputs_ignores_generated_date(tmp_path):
     ]
 
 
+def test_find_matching_outputs_uses_metadata_when_generated_geocode_shifts(tmp_path):
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    _write_map(input_dir, "CZ01002603203EB25I01C013.map")
+    shifted = _write_map(output_dir, "CZ01002604163EB25J01C012.map")
+    shifted.with_name(f"{shifted.name}.build.json").write_text(
+        "{"
+        '"OriginalName":"CZ01002603203EB25I01C013.map",'
+        '"CountryCode":"CZ",'
+        '"ProductCode":"0100",'
+        '"OriginalTileGeocode":"3EB25I01C013",'
+        '"GeneratedDataGeocode":"3EB25J01C012"'
+        "}",
+        encoding="utf-8",
+    )
+
+    matches = find_matching_outputs(parsed_map_files(input_dir), output_dir)
+
+    assert [match["filename"] for match in matches] == [
+        "CZ01002604163EB25J01C012.map",
+    ]
+
+
 def test_package_name_uses_country_label_latest_date_and_count(tmp_path):
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"

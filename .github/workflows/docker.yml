@@ -1,0 +1,30 @@
+name: Docker
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  docker:
+    name: build and dry-run
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" -t igpsport-map-updater .
+
+      - name: Verify image tools
+        run: docker run --rm igpsport-map-updater bash -lc 'java -version && uv --version && osmium --version && cat /work/.tool-versions'
+
+      - name: Run pytest in image
+        run: docker run --rm igpsport-map-updater uv run pytest -q
+
+      - name: Dry run workflow
+        run: |
+          docker run --rm igpsport-map-updater bash -lc 'set -eux; java -version; uv --version; osmium --version; uv run pytest -q; mkdir -p /tmp/igpsport-dryrun/input; touch /tmp/igpsport-dryrun/input/BR01002303102B83FO00N00E.map; uv run python generate_maps_csv.py /tmp/igpsport-dryrun/input -o /tmp/igpsport-dryrun/maps.csv; test -s /tmp/igpsport-dryrun/maps.csv'
