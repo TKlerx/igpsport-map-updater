@@ -2,10 +2,6 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 
-[options]
-exclude-newer = "2026-03-21T12:06:36.2470949Z"
-exclude-newer-span = "P7D"
-
 [[package]]
 name = "certifi"
 version = "2026.2.25"

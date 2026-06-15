@@ -25,12 +25,16 @@ DEFAULT_PACKAGE_DIR = "packages"
 DEFAULT_README = "BINAVI_EXPERIMENTAL_README.txt"
 
 
+def _as_path(path):
+    return path if isinstance(path, Path) else Path(path)
+
+
 def binavi_maps_dir(base_dir):
-    return Path(base_dir) / "Maps"
+    return _as_path(base_dir) / "Maps"
 
 
 def binavi_router_dir(base_dir):
-    return Path(base_dir) / "Router"
+    return _as_path(base_dir) / "Router"
 
 
 def parseable_binavi_maps(base_dir):
