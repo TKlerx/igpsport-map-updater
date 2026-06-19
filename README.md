@@ -25,6 +25,7 @@ Use [MAP_PACKAGE_README.txt](MAP_PACKAGE_README.txt) as the README file for shar
 
 - **Java 17** or higher
 - **Python 3.12** or higher (for utilities like `generate_maps_csv.py`)
+- **uv** (Python package/project manager used by this repository)
 - **Internet connection** (for downloading OSM data and dependencies)
 - **Disk space**: Several GB depending on the size of the regions being processed
 
@@ -44,12 +45,44 @@ Docker can provide Java, Python, Osmium, Osmosis, and Mapsforge for the Unix wor
 
 ### Python Setup
 
+Install Python 3.12 or newer first, then install `uv`. `uv` is a separate command-line tool; it is not included automatically just because Python is installed.
+
+Windows options:
+
+```powershell
+winget install --id=astral-sh.uv -e
+```
+
+or, with the official standalone installer:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+macOS/Linux:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+If you already use `pipx`, this is also a good isolated install option:
+
+```bash
+pipx install uv
+```
+
+Confirm `uv` is available, then install the project dependencies:
+
+```bash
+uv --version
+```
+
 ```bash
 uv sync                # installs dev dependencies (pytest)
 uv sync --extra pbf    # also installs pyosmium (needed for extract_tags_pbf.py)
 ```
 
-Use `uv run python ...` for Python utilities when possible. This keeps the repo on the configured Python version and avoids accidentally using a different system Python.
+Use `uv run python ...` for Python utilities when possible. This keeps the repo on the configured Python version from `.python-version`, installs dependencies from `uv.lock`, and avoids accidentally using a different system Python.
 
 ### Run with Docker
 
