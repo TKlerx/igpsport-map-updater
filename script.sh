@@ -1000,8 +1000,8 @@ for i in "${!PBF_FILES[@]}"; do
     OUTPUT_FILE="$OUTPUT_DIR/out_$file_index.map"
     
     echo "Running osmosis..."
-    run_osmosis_map_writer "$requested_writer_type" "$effective_threads" "$effective_java_xms" "$effective_java_xmx"
-    run_status=$?
+    run_status=0
+    run_osmosis_map_writer "$requested_writer_type" "$effective_threads" "$effective_java_xms" "$effective_java_xmx" || run_status=$?
     final_writer_type="$requested_writer_type"
     final_threads="$effective_threads"
     final_java_xms="$effective_java_xms"
@@ -1013,8 +1013,8 @@ for i in "${!PBF_FILES[@]}"; do
         fallback_java_xms="${JAVA_XMS:-$hd_java_xms}"
         fallback_java_xmx="${JAVA_XMX:-$hd_java_xmx}"
         echo "WARNING: RAM writer attempt failed for $file_name. Retrying with hd..."
-        run_osmosis_map_writer "hd" "$fallback_threads" "$fallback_java_xms" "$fallback_java_xmx"
-        run_status=$?
+        run_status=0
+        run_osmosis_map_writer "hd" "$fallback_threads" "$fallback_java_xms" "$fallback_java_xmx" || run_status=$?
 
         if [ $run_status -eq 0 ]; then
             final_writer_type="hd"
