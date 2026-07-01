@@ -13,7 +13,7 @@ if [ ! -d "$OSMOSIS_DIR" ]; then
     OSMOSIS_URL="https://github.com/openstreetmap/osmosis/releases/download/$OSMOSIS_VERSION/osmosis-$OSMOSIS_VERSION.zip"
     OSMOSIS_ZIP="$SCRIPT_DIR/osmosis-$OSMOSIS_VERSION.zip"
     
-    curl -sL -o "$OSMOSIS_ZIP" "$OSMOSIS_URL"
+    curl -fsL -o "$OSMOSIS_ZIP" "$OSMOSIS_URL"
     
     echo "Extracting osmosis..."
     unzip -q "$OSMOSIS_ZIP" -d "$SCRIPT_DIR"
@@ -36,7 +36,7 @@ if [ ! -f "$MAPSFORGE_WRITER_JAR" ]; then
     echo "Mapsforge writer plugin not found. Downloading version $MAPSFORGE_WRITER_VERSION..."
     MAPSFORGE_URL="https://github.com/mapsforge/mapsforge/releases/download/${MAPSFORGE_WRITER_VERSION}/mapsforge-map-writer-${MAPSFORGE_WRITER_VERSION}-jar-with-dependencies.jar"
     
-    curl -sL -o "$MAPSFORGE_WRITER_JAR" "$MAPSFORGE_URL"
+    curl -fsL -o "$MAPSFORGE_WRITER_JAR" "$MAPSFORGE_URL"
     
     echo "Mapsforge writer plugin installed successfully."
     echo ""
@@ -153,7 +153,7 @@ while IFS=',' read -r original_name pbf_url poly_url; do
 
         if [ ! -f "$pbf_path" ]; then
             echo "  Downloading PBF: $pbf_filename..."
-            curl -sL -o "$pbf_path" "$trimmed_pbf_url"
+            curl -fsL -o "$pbf_path" "$trimmed_pbf_url"
             echo "  PBF downloaded."
         else
             echo "  PBF already exists: $pbf_filename"
@@ -164,7 +164,7 @@ while IFS=',' read -r original_name pbf_url poly_url; do
 
         if [ ! -f "$poly_path" ]; then
             echo "  Downloading Poly: $poly_filename..."
-            curl -sL -o "$poly_path" "$trimmed_poly_url"
+            curl -fsL -o "$poly_path" "$trimmed_poly_url"
             echo "  Poly downloaded."
         else
             echo "  Poly already exists: $poly_filename"
@@ -1000,8 +1000,8 @@ for i in "${!PBF_FILES[@]}"; do
     OUTPUT_FILE="$OUTPUT_DIR/out_$file_index.map"
     
     echo "Running osmosis..."
-    run_osmosis_map_writer "$requested_writer_type" "$effective_threads" "$effective_java_xms" "$effective_java_xmx"
-    run_status=$?
+    run_status=0
+    run_osmosis_map_writer "$requested_writer_type" "$effective_threads" "$effective_java_xms" "$effective_java_xmx" || run_status=$?
     final_writer_type="$requested_writer_type"
     final_threads="$effective_threads"
     final_java_xms="$effective_java_xms"
@@ -1013,8 +1013,8 @@ for i in "${!PBF_FILES[@]}"; do
         fallback_java_xms="${JAVA_XMS:-$hd_java_xms}"
         fallback_java_xmx="${JAVA_XMX:-$hd_java_xmx}"
         echo "WARNING: RAM writer attempt failed for $file_name. Retrying with hd..."
-        run_osmosis_map_writer "hd" "$fallback_threads" "$fallback_java_xms" "$fallback_java_xmx"
-        run_status=$?
+        run_status=0
+        run_osmosis_map_writer "hd" "$fallback_threads" "$fallback_java_xms" "$fallback_java_xmx" || run_status=$?
 
         if [ $run_status -eq 0 ]; then
             final_writer_type="hd"
