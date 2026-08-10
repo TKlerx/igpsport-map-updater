@@ -13,3 +13,6 @@ pbf = ["osmium>=4.0.0"]
 dev = [
     "pytest>=9.0.2",
 ]
+
+[tool.uv]
+exclude-newer = "1 week"
