@@ -3,8 +3,8 @@ revision = 3
 requires-python = ">=3.12"
 
 [options]
-exclude-newer = "2026-08-03T16:00:42.0529496Z"
-exclude-newer-span = "P7D"
+exclude-newer = "2026-08-03T16:36:21.6648136Z"
+exclude-newer-span = "P1W"
 
 [[package]]
 name = "certifi"
