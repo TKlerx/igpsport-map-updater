@@ -11,7 +11,7 @@ pbf = ["osmium>=4.0.0"]
 
 [dependency-groups]
 dev = [
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",
 ]
 
 [tool.uv]
