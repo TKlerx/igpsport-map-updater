@@ -5,6 +5,7 @@ output-*/
 tmp/
 backup/
 input/
+input-uk/
 packages/
 maps-bak/
 maps.csv
